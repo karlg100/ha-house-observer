@@ -1,0 +1,25 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=75"]
+
+[project]
+name = "ha-house-observer"
+version = "0.1.0"
+description = "Local operational memory and AI summaries for Home Assistant"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [
+  {name = "Karl Grindley"}
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+

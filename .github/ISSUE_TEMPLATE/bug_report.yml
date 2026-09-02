@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible House Observer problem
+body:
+  - type: markdown
+    attributes:
+      value: Please download and attach integration diagnostics when safe to do so.
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+    validations:
+      required: true
+  - type: input
+    id: observer_version
+    attributes:
+      label: House Observer version
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: text
+

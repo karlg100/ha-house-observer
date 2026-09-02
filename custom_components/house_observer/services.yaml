@@ -1,0 +1,76 @@
+generate_summary:
+  fields:
+    config_entry_id:
+      description: Target observer entry. Required only when several properties are configured.
+      selector:
+        config_entry:
+          integration: house_observer
+    hours:
+      default: 24
+      selector:
+        number:
+          min: 1
+          max: 168
+          step: 1
+          mode: box
+
+record_note:
+  fields:
+    config_entry_id:
+      description: Target observer entry. Required only when several properties are configured.
+      selector:
+        config_entry:
+          integration: house_observer
+    note:
+      required: true
+      selector:
+        text:
+          multiline: true
+    category:
+      default: owner
+      selector:
+        select:
+          options:
+            - owner
+            - maintenance
+            - guest_report
+            - configuration_change
+
+set_stay_context:
+  fields:
+    config_entry_id:
+      description: Target observer entry. Required only when several properties are configured.
+      selector:
+        config_entry:
+          integration: house_observer
+    clear:
+      default: false
+      selector:
+        boolean:
+    reservation_id:
+      selector:
+        text:
+    label:
+      selector:
+        text:
+    guest_count:
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          mode: box
+    pet_count:
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          mode: box
+    check_in:
+      selector:
+        datetime:
+    check_out:
+      selector:
+        datetime:
+

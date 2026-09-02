@@ -1,0 +1,199 @@
+# House Observer for Home Assistant
+
+House Observer converts selected Home Assistant telemetry into a small, local,
+operational memory for a property. It records meaningful state transitions,
+learns simple explainable baselines, generates daily or on-demand summaries,
+and can call any configured Home Assistant AI Task provider for interpretation.
+
+The integration is designed for homes and short-term rentals where raw history
+is plentiful but useful operational context is hard to see.
+
+> [!IMPORTANT]
+> House Observer is an analyst, not a safety controller. Keep deterministic Home
+> Assistant automations for smoke, carbon monoxide, freezing, leaks, security,
+> equipment limits, and other time-critical conditions.
+
+## Current status
+
+Version `0.1.0` is an observation-first release. Learning-only mode is enabled
+by default, and proactive anomaly notifications remain suppressed until you
+explicitly disable it.
+
+## What it does
+
+- Watches only the entities you select.
+- Groups entities by operational meaning: activity, access, occupancy, spa,
+  HVAC, Internet, energy, and reservation context.
+- Debounces high-frequency numeric telemetry before storing it.
+- Retains a bounded local event history in Home Assistant `.storage`.
+- Learns per-entity numeric ranges, state frequency, and activity by hour.
+- Marks statistically unusual numeric readings as explainable deviation
+  candidates after enough samples exist.
+- Produces a daily summary at a configurable local time.
+- Produces manual summaries through the `house_observer.generate_summary`
+  action and returns structured response data.
+- Uses a configured `ai_task` entity, or Home Assistant's preferred AI Task
+  entity, without tying the integration to one AI vendor.
+- Falls back to a deterministic summary when AI Task is unavailable.
+- Stores reservation context without creating a permanent guest dossier.
+- Exposes status, recent event/anomaly counts, learned baseline count, active
+  stay, and latest summary sensors.
+
+## Installation with HACS
+
+Until this project is part of HACS's default catalog, add it as a custom
+repository:
+
+1. Open HACS in Home Assistant.
+2. Open the menu and choose **Custom repositories**.
+3. Add `https://github.com/karlg100/ha-house-observer`.
+4. Select **Integration** as the category.
+5. Install **House Observer** and restart Home Assistant.
+6. Open **Settings > Devices & services > Add integration** and search for
+   **House Observer**.
+
+## Recommended first configuration
+
+Start with a deliberate subset of reliable entities. For a rental property,
+good first candidates are:
+
+| Category | Useful entity types |
+| --- | --- |
+| Activity | Motion, appliance operation, meaningful room activity helpers |
+| Access | Exterior door contacts and lock state |
+| Occupancy | Non-camera presence or occupancy helpers |
+| Spa | Water temperature, setpoint, heater, pumps, filtration, ozone, power |
+| HVAC | Climate entities, room temperature, HVAC action, mini-split power |
+| Network | WAN availability, Starlink latency/outages, router availability |
+| Energy | Whole-home power and important Emporia circuits |
+| Reservation | Calendar or helpers describing the current stay |
+
+Keep **Learning-only mode** enabled for several representative stays. Review the
+stored summaries and baseline candidates before enabling proactive alerts.
+
+## AI Task setup
+
+House Observer does not include an AI model or require a particular provider.
+Install and configure a Home Assistant integration that supplies an AI Task
+entity. Select that entity in House Observer settings, or leave the field blank
+to use Home Assistant's preferred AI Task entity.
+
+When no `ai_task.generate_data` action is available, House Observer records a
+deterministic summary containing event and deviation counts instead.
+
+## Entities
+
+One House Observer device is created per configured property with these sensors:
+
+- **Status**: `learning`, `normal`, `note`, `watch`, or `action`.
+- **Events in 24 hours**: number of curated state transitions.
+- **Anomalies in 24 hours**: number of numeric baseline deviation candidates.
+- **Learned baselines**: entities with enough observations to compare.
+- **Last summary**: timestamp with structured summary attributes.
+- **Active stay**: current manually supplied reservation context.
+
+## Actions
+
+### Generate a summary
+
+```yaml
+action: house_observer.generate_summary
+data:
+  hours: 24
+response_variable: observer_result
+```
+
+The response includes `summary`, `severity`, `confidence`, `observations`,
+`anomalies`, `maintenance_notes`, `candidate_memories`, `notify_owner`, and
+metadata about when and why it was generated.
+
+### Record a property note
+
+Use this after maintenance, an equipment change, or a guest-reported issue so
+future summaries have relevant context.
+
+```yaml
+action: house_observer.record_note
+data:
+  category: maintenance
+  note: Replaced the spa filter and changed filtration settings.
+```
+
+### Set current-stay context
+
+```yaml
+action: house_observer.set_stay_context
+data:
+  reservation_id: ABC123
+  label: Weekend stay
+  guest_count: 8
+  pet_count: 2
+  check_in: "2026-09-04 16:00:00"
+  check_out: "2026-09-07 10:00:00"
+```
+
+Clear it after checkout:
+
+```yaml
+action: house_observer.set_stay_context
+data:
+  clear: true
+```
+
+If you configure more than one property, include `config_entry_id` in action
+calls. The UI action editor provides a config-entry picker.
+
+## Notifications
+
+Enter a full notification action such as `notify.mobile_app_karl_phone` in the
+integration options. Daily summaries are independently optional.
+
+Anomaly notifications require all of the following:
+
+1. Learning-only mode is disabled.
+2. A configured notification action exists.
+3. The AI response classifies the condition as `watch` or `action`.
+4. The AI response explicitly sets `notify_owner` to true.
+5. The anomaly-analysis cooldown has elapsed.
+
+These rules prevent a model response alone from bypassing the integration's
+notification policy.
+
+## Memory and privacy
+
+- Event history and learned aggregates remain in the Home Assistant instance.
+- Only selected entities are observed.
+- A deliberately small allowlist of state attributes is retained.
+- Camera images, audio, people names, and device context are not collected.
+- Event retention defaults to 45 days and is capped at 5,000 events.
+- Aggregate patterns survive event pruning so the property can learn over time.
+- AI prompts explicitly prohibit identities, motives, protected
+  characteristics, or unsupported occupancy conclusions.
+- Candidate memories describe the property, not individual guests.
+
+Selected telemetry is sent to the configured AI Task provider whenever an AI
+summary is generated. The provider's own privacy and retention terms apply.
+
+## Known limits in 0.1.0
+
+- Baselines are per entity. Weather-normalized spa recovery and cross-sensor
+  energy correlation are planned, but not yet implemented.
+- Numeric anomaly detection uses running mean and standard deviation. It is a
+  transparent clue generator, not a fault diagnosis.
+- Reservation context must be supplied by an automation or action call.
+- The integration does not yet provide a dedicated dashboard card.
+
+## Development
+
+The repository includes pure-Python tests for memory models and baseline logic,
+plus HACS and Hassfest validation workflows.
+
+```bash
+python -m pytest
+python scripts/validate_repo.py
+```
+
+## License
+
+MIT
+

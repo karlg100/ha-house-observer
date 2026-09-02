@@ -1,0 +1,138 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This property is already configured."
+    },
+    "step": {
+      "behavior": {
+        "data": {
+          "ai_task_entity": "AI Task entity (optional)",
+          "learning_only": "Learning-only mode",
+          "lookback_hours": "Daily summary lookback (hours)",
+          "minimum_baseline_samples": "Minimum samples before anomaly detection",
+          "notify_daily_summary": "Send the daily summary",
+          "notify_service": "Notification action, such as notify.mobile_app_phone (optional)",
+          "retention_days": "Event retention (days)",
+          "summary_time": "Daily summary time",
+          "zscore_threshold": "Numeric anomaly sensitivity (standard deviations)"
+        },
+        "data_description": {
+          "ai_task_entity": "Choose a configured AI Task provider or leave blank to use Home Assistant's preferred provider.",
+          "learning_only": "When enabled, observations and summaries are stored but anomaly notifications are suppressed.",
+          "lookback_hours": "How much recent activity is included in each scheduled summary.",
+          "minimum_baseline_samples": "An entity must have this many observations before it can produce a numeric deviation candidate.",
+          "notify_daily_summary": "Requires a notification action below. This setting is independent of anomaly alerts.",
+          "notify_service": "Enter the full Home Assistant action name. Leave blank to keep summaries inside Home Assistant only.",
+          "retention_days": "Raw curated observations older than this are discarded. Learned aggregate baselines remain.",
+          "summary_time": "Uses Home Assistant's configured local time zone.",
+          "zscore_threshold": "Higher values create fewer deviation candidates. The default is deliberately conservative."
+        },
+        "description": "Start conservatively. Learning-only mode is recommended until the observer has seen several stays.",
+        "title": "Observer behavior"
+      },
+      "entities": {
+        "data": {
+          "access_entities": "Doors and locks",
+          "activity_entities": "Motion and activity",
+          "energy_entities": "Energy and power",
+          "hvac_entities": "HVAC and room temperature",
+          "network_entities": "Internet and network",
+          "occupancy_entities": "Occupancy indicators",
+          "reservation_entities": "Reservation context entities",
+          "spa_entities": "Hot tub and spa"
+        },
+        "data_description": {
+          "access_entities": "Door contacts, exterior locks, and related access indicators.",
+          "activity_entities": "Motion, presence, appliance use, or other indicators of household activity.",
+          "energy_entities": "Whole-home and important circuit power sensors, including Emporia entities.",
+          "hvac_entities": "Thermostats, mini-splits, temperature sensors, and HVAC operating states.",
+          "network_entities": "Starlink connectivity, latency, throughput, and router availability.",
+          "occupancy_entities": "Non-camera occupancy estimates or presence helpers.",
+          "reservation_entities": "Calendar or helper entities that describe the current stay.",
+          "spa_entities": "Gecko water temperature, setpoint, heater, pump, filter, ozone, and spa power entities."
+        },
+        "description": "Only selected entities are observed. Put each entity in the category that best describes its operational meaning.",
+        "title": "Choose entities"
+      },
+      "user": {
+        "data": {
+          "property_name": "Property name"
+        },
+        "data_description": {
+          "property_name": "The name used in summaries, notifications, and the observer device."
+        },
+        "description": "House Observer turns selected Home Assistant telemetry into bounded local memory, operational summaries, and explainable anomaly candidates.",
+        "title": "Set up House Observer"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "active_stay": {
+        "name": "Active stay"
+      },
+      "anomalies_24h": {
+        "name": "Anomalies in 24 hours"
+      },
+      "events_24h": {
+        "name": "Events in 24 hours"
+      },
+      "last_summary": {
+        "name": "Last summary"
+      },
+      "learned_baselines": {
+        "name": "Learned baselines"
+      },
+      "status": {
+        "name": "Status"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "access_entities": "Doors and locks",
+          "activity_entities": "Motion and activity",
+          "ai_task_entity": "AI Task entity (optional)",
+          "energy_entities": "Energy and power",
+          "hvac_entities": "HVAC and room temperature",
+          "learning_only": "Learning-only mode",
+          "lookback_hours": "Daily summary lookback (hours)",
+          "minimum_baseline_samples": "Minimum samples before anomaly detection",
+          "network_entities": "Internet and network",
+          "notify_daily_summary": "Send the daily summary",
+          "notify_service": "Notification action (optional)",
+          "occupancy_entities": "Occupancy indicators",
+          "reservation_entities": "Reservation context entities",
+          "retention_days": "Event retention (days)",
+          "spa_entities": "Hot tub and spa",
+          "summary_time": "Daily summary time",
+          "zscore_threshold": "Numeric anomaly sensitivity"
+        },
+        "data_description": {
+          "learning_only": "Disable only after reviewing several summaries and learned behavior.",
+          "notify_service": "Use a full action name such as notify.mobile_app_phone."
+        },
+        "description": "Changes reload the observer automatically.",
+        "title": "House Observer settings"
+      }
+    }
+  },
+  "services": {
+    "generate_summary": {
+      "description": "Generate and store an operational summary now.",
+      "name": "Generate summary"
+    },
+    "record_note": {
+      "description": "Add an owner or maintenance note to local observer memory.",
+      "name": "Record note"
+    },
+    "set_stay_context": {
+      "description": "Set or clear reservation context for the current stay.",
+      "name": "Set stay context"
+    }
+  },
+  "title": "House Observer"
+}
+
