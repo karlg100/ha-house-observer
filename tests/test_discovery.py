@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 
 def _candidate(discovery_module, entity_id: str, **values):
     return discovery_module.DiscoveryCandidate(
@@ -123,3 +125,66 @@ def test_inventory_limit_keeps_each_area_represented(discovery_module) -> None:
     selected = discovery_module.eligible_candidates(candidates, limit=6)
 
     assert {item.area_name for item in selected} == {"Area 0", "Area 1", "Area 2"}
+
+
+def test_discovery_uses_progressive_learning_schedule(discovery_module) -> None:
+    started = datetime(2026, 9, 3, 12, tzinfo=UTC)
+
+    first_followup = discovery_module.next_discovery_due(
+        last_run=started,
+        bootstrap_started_at=started,
+        successful_ai_runs=1,
+        ai_generated=True,
+        configured_interval_hours=168,
+    )
+    third_day_followup = discovery_module.next_discovery_due(
+        last_run=first_followup,
+        bootstrap_started_at=started,
+        successful_ai_runs=2,
+        ai_generated=True,
+        configured_interval_hours=168,
+    )
+    seventh_day_followup = discovery_module.next_discovery_due(
+        last_run=third_day_followup,
+        bootstrap_started_at=started,
+        successful_ai_runs=3,
+        ai_generated=True,
+        configured_interval_hours=168,
+    )
+    mature_followup = discovery_module.next_discovery_due(
+        last_run=seventh_day_followup,
+        bootstrap_started_at=started,
+        successful_ai_runs=4,
+        ai_generated=True,
+        configured_interval_hours=168,
+    )
+
+    assert first_followup == started + timedelta(hours=24)
+    assert third_day_followup == started + timedelta(hours=72)
+    assert seventh_day_followup == started + timedelta(hours=168)
+    assert mature_followup == started + timedelta(hours=336)
+
+
+def test_failed_ai_discovery_retries_daily(discovery_module) -> None:
+    last_run = datetime(2026, 9, 3, 12, tzinfo=UTC)
+
+    assert discovery_module.next_discovery_due(
+        last_run=last_run,
+        bootstrap_started_at=last_run,
+        successful_ai_runs=0,
+        ai_generated=False,
+        configured_interval_hours=168,
+    ) == last_run + timedelta(hours=24)
+
+
+def test_short_configured_interval_caps_bootstrap_wait(discovery_module) -> None:
+    started = datetime(2026, 9, 3, 12, tzinfo=UTC)
+    last_run = started + timedelta(hours=24)
+
+    assert discovery_module.next_discovery_due(
+        last_run=last_run,
+        bootstrap_started_at=started,
+        successful_ai_runs=2,
+        ai_generated=True,
+        configured_interval_hours=24,
+    ) == started + timedelta(hours=48)
