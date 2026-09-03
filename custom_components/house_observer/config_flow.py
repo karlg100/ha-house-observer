@@ -41,6 +41,7 @@ from .const import (
     CONF_NEVER_MONITOR_ENTITIES,
     CONF_NOTIFY_DAILY,
     CONF_NOTIFY_SERVICE,
+    CONF_OBSERVER_GUIDANCE,
     CONF_OCCUPANCY_ENTITIES,
     CONF_PROPERTY_NAME,
     CONF_RESERVATION_ENTITIES,
@@ -54,6 +55,7 @@ from .const import (
     DEFAULT_LOOKBACK_HOURS,
     DEFAULT_MIN_SAMPLES,
     DEFAULT_NOTIFY_DAILY,
+    DEFAULT_OBSERVER_GUIDANCE,
     DEFAULT_PROPERTY_NAME,
     DEFAULT_RETENTION_DAYS,
     DEFAULT_SUMMARY_TIME,
@@ -103,6 +105,9 @@ def _behavior_schema() -> vol.Schema:
             vol.Optional(CONF_AI_TASK_ENTITY): EntitySelector(
                 EntitySelectorConfig(domain="ai_task", multiple=False)
             ),
+            vol.Optional(
+                CONF_OBSERVER_GUIDANCE, default=DEFAULT_OBSERVER_GUIDANCE
+            ): TextSelector(TextSelectorConfig(multiline=True)),
             vol.Required(
                 CONF_SUMMARY_TIME, default=DEFAULT_SUMMARY_TIME
             ): TimeSelector(),

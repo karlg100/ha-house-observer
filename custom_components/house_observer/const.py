@@ -20,6 +20,7 @@ CONF_NETWORK_ENTITIES: Final = "network_entities"
 CONF_ENERGY_ENTITIES: Final = "energy_entities"
 CONF_RESERVATION_ENTITIES: Final = "reservation_entities"
 CONF_AI_TASK_ENTITY: Final = "ai_task_entity"
+CONF_OBSERVER_GUIDANCE: Final = "observer_guidance"
 CONF_SUMMARY_TIME: Final = "summary_time"
 CONF_LOOKBACK_HOURS: Final = "lookback_hours"
 CONF_RETENTION_DAYS: Final = "retention_days"
@@ -58,6 +59,7 @@ GROUP_LABELS: Final = {
 }
 
 DEFAULT_PROPERTY_NAME: Final = "Home"
+DEFAULT_OBSERVER_GUIDANCE: Final = ""
 DEFAULT_SUMMARY_TIME: Final = "08:00:00"
 DEFAULT_LOOKBACK_HOURS: Final = 24
 DEFAULT_RETENTION_DAYS: Final = 45

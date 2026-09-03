@@ -13,6 +13,7 @@
           "minimum_baseline_samples": "Minimum samples before anomaly detection",
           "notify_daily_summary": "Send the daily summary",
           "notify_service": "Notification action, such as notify.mobile_app_phone (optional)",
+          "observer_guidance": "Persistent observer guidance (optional)",
           "retention_days": "Event retention (days)",
           "summary_time": "Daily summary time",
           "zscore_threshold": "Numeric anomaly sensitivity (standard deviations)"
@@ -25,6 +26,7 @@
           "minimum_baseline_samples": "An entity must have this many observations before it can produce a numeric deviation candidate.",
           "notify_daily_summary": "Requires a notification action below. This setting is independent of anomaly alerts.",
           "notify_service": "Enter the full Home Assistant action name. Leave blank to keep summaries inside Home Assistant only.",
+          "observer_guidance": "Property-specific priorities included with every AI summary. Edit this text at any time, or clear it to remove the guidance.",
           "retention_days": "Raw curated observations older than this are discarded. Learned aggregate baselines remain.",
           "summary_time": "Uses Home Assistant's configured local time zone.",
           "zscore_threshold": "Higher values create fewer deviation candidates. The default is deliberately conservative."
@@ -124,6 +126,7 @@
           "never_monitor_entities": "Never monitor these entities",
           "notify_daily_summary": "Send the daily summary",
           "notify_service": "Notification action (optional)",
+          "observer_guidance": "Persistent observer guidance (optional)",
           "occupancy_entities": "Occupancy indicators",
           "reservation_entities": "Reservation context entities",
           "retention_days": "Event retention (days)",
@@ -139,7 +142,8 @@
           "learning_only": "Disable only after reviewing several summaries and learned behavior.",
           "never_monitor_devices": "User override: entities belonging to these devices are never monitored. This always wins.",
           "never_monitor_entities": "User override: these entities are never monitored. This always wins.",
-          "notify_service": "Use a full action name such as notify.mobile_app_phone."
+          "notify_service": "Use a full action name such as notify.mobile_app_phone.",
+          "observer_guidance": "This guidance is included with every AI summary. Edit it here or clear the field to remove it."
         },
         "description": "Changes reload the observer automatically.",
         "title": "House Observer settings"

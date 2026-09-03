@@ -50,3 +50,9 @@ def reservations_module():
 def semantics_module():
     """Return the pure entity-semantics module."""
     return _load_module("house_observer_semantics", "semantics.py")
+
+
+@pytest.fixture(scope="session")
+def guidance_module():
+    """Return the pure persistent-guidance module."""
+    return _load_module("house_observer_guidance", "guidance.py")
