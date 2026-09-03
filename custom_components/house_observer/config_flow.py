@@ -54,6 +54,8 @@ from .const import (
 
 def _entity_selector(*, domain: str | None = None) -> EntitySelector:
     """Create a multiple-entity selector."""
+    if domain is None:
+        return EntitySelector(EntitySelectorConfig(multiple=True))
     return EntitySelector(EntitySelectorConfig(domain=domain, multiple=True))
 
 
