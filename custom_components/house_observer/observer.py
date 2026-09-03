@@ -84,6 +84,7 @@ from .reservations import (
     normalize_reservations,
     safe_reservation_attributes,
 )
+from .semantics import semantic_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -301,6 +302,7 @@ class HouseObserver:
         self._prune()
         self._refresh_discovery_candidates()
         self._scrub_reservation_memory()
+        self._normalize_binary_memory()
         self._rebind_observation_listener()
         if self.options[CONF_AUTO_DISCOVERY]:
             if self._discovery_candidates:
@@ -407,7 +409,7 @@ class HouseObserver:
                     if is_reservation_state(
                         entry.entity_id, state.attributes, configured_reservations
                     )
-                    else state.state
+                    else semantic_state(entry.entity_id, state.state, state.attributes)
                 ),
                 domain=entry.entity_id.split(".", 1)[0],
                 device_class=str(device_class) if device_class else None,
@@ -459,6 +461,35 @@ class HouseObserver:
                 continue
             count = sum(int(value) for value in record.get("state_counts", {}).values())
             record["state_counts"] = ({RESERVATION_CHANGED: count} if count else {})
+
+    def _normalize_binary_memory(self) -> None:
+        """Translate binary states retained by earlier versions."""
+        for observation in self.events:
+            state = self.hass.states.get(observation.entity_id)
+            attributes = observation.attributes
+            if state is not None and "device_class" not in attributes:
+                attributes = state.attributes
+            if observation.old_state is not None:
+                observation.old_state = semantic_state(
+                    observation.entity_id, observation.old_state, attributes
+                )
+            observation.new_state = semantic_state(
+                observation.entity_id, observation.new_state, attributes
+            )
+
+        for entity_id, record in self.patterns.entities.items():
+            state = self.hass.states.get(entity_id)
+            if state is None or not entity_id.startswith("binary_sensor."):
+                continue
+            normalized: dict[str, int] = {}
+            for value, count in record.get("state_counts", {}).items():
+                label = semantic_state(entity_id, value, state.attributes)
+                normalized[label] = normalized.get(label, 0) + int(count)
+            record["state_counts"] = normalized
+            if last_state := record.get("last_state"):
+                record["last_state"] = semantic_state(
+                    entity_id, last_state, state.attributes
+                )
 
     @callback
     def _rebind_observation_listener(self) -> None:
@@ -642,11 +673,19 @@ class HouseObserver:
         category = (
             "reservation" if reservation else self._category_for(new_state.entity_id)
         )
-        observed_state = RESERVATION_CHANGED if reservation else new_state.state
+        observed_state = (
+            RESERVATION_CHANGED
+            if reservation
+            else semantic_state(
+                new_state.entity_id, new_state.state, new_state.attributes
+            )
+        )
         observed_old_state = (
             RESERVATION_CHANGED
             if reservation and old_state is not None
-            else old_state.state
+            else semantic_state(
+                old_state.entity_id, old_state.state, old_state.attributes
+            )
             if old_state is not None
             else None
         )
@@ -900,7 +939,9 @@ class HouseObserver:
                         "entity_id": entity_id,
                         "name": state.name,
                         "category": self._category_for(entity_id),
-                        "state": state.state,
+                        "state": semantic_state(
+                            entity_id, state.state, state.attributes
+                        ),
                         "unit": state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
                         "attributes": self._safe_attributes(state),
                     }
@@ -942,7 +983,14 @@ class HouseObserver:
             "apparent activity. Compare telemetry to baselines only when enough "
             "evidence exists. Routine behavior is normal, not suspicious. A numeric "
             "deviation "
-            "is a clue, not proof of a fault. Safety automations remain authoritative; "
+            "is a clue, not proof of a fault. A large z-score alone is never enough "
+            "for WATCH or ACTION; require meaningful absolute impact, persistence, "
+            "or corroboration from another operational signal. Entity states are "
+            "normalized locally using Home Assistant device classes. Use the supplied "
+            "semantic state exactly. In particular, normal from a problem-class "
+            "binary sensor means no problem is detected. Do not flag recovered "
+            "unavailable transitions when the entity is currently available. "
+            "Safety automations remain authoritative; "
             "you are only "
             "providing analysis. Use ACTION for a timely condition that probably needs "
             "owner intervention, WATCH for a meaningful developing issue, NOTE for a "
