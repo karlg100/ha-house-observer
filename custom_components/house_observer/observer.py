@@ -74,6 +74,7 @@ from .discovery import (
     default_category,
     eligible_candidates,
     fallback_recommendations,
+    next_discovery_due,
     parse_recommendations,
 )
 from .models import ObservationEvent, ObserverSummary
@@ -215,6 +216,7 @@ class HouseObserver:
         self._unsubscribers: list[Callable[[], None]] = []
         self._observation_unsubscriber: Callable[[], None] | None = None
         self._candidate_unsubscriber: Callable[[], None] | None = None
+        self._pending_discovery_refresh: Callable[[], None] | None = None
         self._listeners: set[Callable[[], None]] = set()
         self._last_numeric_event: dict[str, tuple[datetime, float]] = {}
         self._lock = asyncio.Lock()
@@ -315,9 +317,19 @@ class HouseObserver:
                 async_track_time_interval(
                     self.hass,
                     self._async_discovery_check,
-                    timedelta(hours=24),
+                    timedelta(hours=1),
                 )
             )
+            for event_type in (
+                "entity_registry_updated",
+                "device_registry_updated",
+                "area_registry_updated",
+            ):
+                self._unsubscribers.append(
+                    self.hass.bus.async_listen(
+                        event_type, self._async_discovery_registry_changed
+                    )
+                )
             if self._discovery_is_due():
                 self._unsubscribers.append(
                     async_call_later(self.hass, 15, self._async_discovery_check)
@@ -347,6 +359,9 @@ class HouseObserver:
         if self._candidate_unsubscriber:
             self._candidate_unsubscriber()
             self._candidate_unsubscriber = None
+        if self._pending_discovery_refresh:
+            self._pending_discovery_refresh()
+            self._pending_discovery_refresh = None
         while self._unsubscribers:
             self._unsubscribers.pop()()
         await self._store.async_save(self._storage_payload())
@@ -521,25 +536,71 @@ class HouseObserver:
             candidate.activity_count = self.discovery_activity[entity_id]
         self._schedule_save()
 
-    def _discovery_is_due(self) -> bool:
-        """Return whether automatic discovery should be refreshed."""
+    def _successful_discovery_runs(self) -> int:
+        """Return the persisted successful AI run count with beta migration."""
+        default = 1 if self.discovery.get("ai_generated") else 0
+        try:
+            return max(0, int(self.discovery.get("successful_ai_runs", default)))
+        except (TypeError, ValueError):
+            return default
+
+    def _discovery_next_run(self) -> datetime | None:
+        """Return the next scheduled automatic discovery time."""
         last_run = dt_util.parse_datetime(str(self.discovery.get("last_run", "")))
         if last_run is None:
-            return True
-        interval = timedelta(hours=int(self.options[CONF_DISCOVERY_INTERVAL_HOURS]))
-        if not self.discovery.get("ai_generated"):
-            interval = min(interval, timedelta(hours=24))
-        return dt_util.now() - last_run >= interval
+            return None
+        bootstrap_started_at = dt_util.parse_datetime(
+            str(self.discovery.get("bootstrap_started_at", ""))
+        )
+        if bootstrap_started_at is None:
+            bootstrap_started_at = last_run
+        return next_discovery_due(
+            last_run=last_run,
+            bootstrap_started_at=bootstrap_started_at,
+            successful_ai_runs=self._successful_discovery_runs(),
+            ai_generated=bool(self.discovery.get("ai_generated")),
+            configured_interval_hours=int(
+                self.options[CONF_DISCOVERY_INTERVAL_HOURS]
+            ),
+        )
+
+    def _discovery_is_due(self, now: datetime | None = None) -> bool:
+        """Return whether automatic discovery should be refreshed."""
+        next_run = self._discovery_next_run()
+        return next_run is None or (now or dt_util.now()) >= next_run
 
     @callback
     def _async_discovery_check(self, now: datetime) -> None:
         """Schedule discovery when its learning interval has elapsed."""
-        if not self.options[CONF_AUTO_DISCOVERY] or not self._discovery_is_due():
+        if not self.options[CONF_AUTO_DISCOVERY] or not self._discovery_is_due(now):
             return
         self.entry.async_create_task(
             self.hass,
             self.async_discover_entities(reason="scheduled"),
             f"Discover important {self.property_name} entities",
+        )
+
+    @callback
+    def _async_discovery_registry_changed(self, _event: Event) -> None:
+        """Queue one discovery review after registry changes settle."""
+        if not self.options[CONF_AUTO_DISCOVERY]:
+            return
+        if self._pending_discovery_refresh:
+            self._pending_discovery_refresh()
+        self._pending_discovery_refresh = async_call_later(
+            self.hass, 3600, self._async_registry_discovery
+        )
+
+    @callback
+    def _async_registry_discovery(self, _now: datetime) -> None:
+        """Review entity choices after a device, entity, or area change."""
+        self._pending_discovery_refresh = None
+        if not self.options[CONF_AUTO_DISCOVERY]:
+            return
+        self.entry.async_create_task(
+            self.hass,
+            self.async_discover_entities(reason="registry_change"),
+            f"Refresh important {self.property_name} entities",
         )
 
     async def async_discover_entities(self, *, reason: str) -> dict[str, Any]:
@@ -589,11 +650,23 @@ class HouseObserver:
         if not recommendations:
             recommendations = fallback_recommendations(candidates)
 
+        completed_at = dt_util.now()
+        successful_ai_runs = self._successful_discovery_runs()
+        bootstrap_started_at = self.discovery.get("bootstrap_started_at")
+        if not bootstrap_started_at and successful_ai_runs:
+            bootstrap_started_at = self.discovery.get("last_run")
+        if ai_generated:
+            successful_ai_runs += 1
+            if not bootstrap_started_at:
+                bootstrap_started_at = completed_at.isoformat()
+
         self.discovery = {
-            "last_run": dt_util.now().isoformat(),
+            "last_run": completed_at.isoformat(),
             "reason": reason,
             "ai_generated": ai_generated,
             "candidate_count": len(candidates),
+            "successful_ai_runs": successful_ai_runs,
+            "bootstrap_started_at": bootstrap_started_at,
             "recommendations": recommendations,
         }
         self.discovery_activity = {
@@ -611,10 +684,27 @@ class HouseObserver:
         recommendations = self.discovery.get("recommendations", [])
         device_ids = {item.get("device_id") for item in recommendations}
         device_ids.discard(None)
+        successful_ai_runs = self._successful_discovery_runs()
+        next_run = self._discovery_next_run()
+        if not self.discovery.get("last_run"):
+            schedule_phase = "initial"
+        elif not self.discovery.get("ai_generated"):
+            schedule_phase = "daily_retry"
+        elif successful_ai_runs <= 3:
+            schedule_phase = (
+                "24_hour_followup",
+                "3_day_followup",
+                "7_day_followup",
+            )[successful_ai_runs - 1]
+        else:
+            schedule_phase = "mature"
         return {
             "last_run": self.discovery.get("last_run"),
+            "next_run": next_run.isoformat() if next_run else None,
             "reason": self.discovery.get("reason"),
             "ai_generated": bool(self.discovery.get("ai_generated")),
+            "successful_ai_runs": successful_ai_runs,
+            "schedule_phase": schedule_phase,
             "candidate_count": int(self.discovery.get("candidate_count", 0)),
             "recommended_device_count": len(device_ids),
             "recommended_entity_count": len(recommendations),
