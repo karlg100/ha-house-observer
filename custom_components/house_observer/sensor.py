@@ -30,6 +30,7 @@ async def async_setup_entry(
             ObserverEventsSensor(manager),
             ObserverAnomaliesSensor(manager),
             ObserverBaselinesSensor(manager),
+            ObserverDiscoverySensor(manager),
             ObserverSummarySensor(manager),
             ObserverStaySensor(manager),
         ]
@@ -137,6 +138,40 @@ class ObserverBaselinesSensor(ObserverSensorBase):
     @property
     def native_value(self) -> int:
         return self.manager.patterns.learned_entity_count
+
+
+class ObserverDiscoverySensor(ObserverSensorBase):
+    """Automatic entity-discovery status and recommendations."""
+
+    _attr_native_unit_of_measurement = "devices"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, manager: HouseObserver) -> None:
+        super().__init__(manager, "discovered_devices")
+
+    @property
+    def native_value(self) -> int:
+        recommendations = self.manager.discovery.get("recommendations", [])
+        return len(
+            {item.get("device_id") or item.get("entity_id") for item in recommendations}
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        result = self.manager.discovery_response()
+        result["recommendations"] = [
+            {
+                "entity_id": item.get("entity_id"),
+                "name": item.get("name"),
+                "device": item.get("device_name"),
+                "area": item.get("area_name"),
+                "category": item.get("category"),
+                "reason": item.get("reason"),
+                "source": item.get("source"),
+            }
+            for item in result["recommendations"][:50]
+        ]
+        return result
 
 
 class ObserverSummarySensor(ObserverSensorBase):

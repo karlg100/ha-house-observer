@@ -14,6 +14,14 @@ generate_summary:
           step: 1
           mode: box
 
+discover_entities:
+  fields:
+    config_entry_id:
+      description: Target observer entry. Required only when several properties are configured.
+      selector:
+        config_entry:
+          integration: house_observer
+
 record_note:
   fields:
     config_entry_id:
@@ -73,4 +81,3 @@ set_stay_context:
     check_out:
       selector:
         datetime:
-

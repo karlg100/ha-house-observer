@@ -31,6 +31,7 @@ from .const import (
     DEFAULT_LOOKBACK_HOURS,
     DOMAIN,
     PLATFORMS,
+    SERVICE_DISCOVER_ENTITIES,
     SERVICE_GENERATE_SUMMARY,
     SERVICE_RECORD_NOTE,
     SERVICE_SET_STAY_CONTEXT,
@@ -83,6 +84,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             str(call.data[ATTR_NOTE]), str(call.data.get(ATTR_CATEGORY, "owner"))
         )
 
+    async def discover_entities(call: ServiceCall) -> ServiceResponse:
+        manager = _manager_for_call(hass, call)
+        return await manager.async_discover_entities(reason="manual")
+
     async def set_stay_context(call: ServiceCall) -> None:
         manager = _manager_for_call(hass, call)
         if call.data.get(ATTR_CLEAR, False):
@@ -115,6 +120,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ),
             }
         ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DISCOVER_ENTITIES,
+        discover_entities,
+        schema=vol.Schema({vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string}),
         supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(

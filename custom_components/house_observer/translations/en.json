@@ -7,6 +7,7 @@
       "behavior": {
         "data": {
           "ai_task_entity": "AI Task entity (optional)",
+          "discovery_interval_hours": "Reevaluate devices every (hours)",
           "learning_only": "Learning-only mode",
           "lookback_hours": "Daily summary lookback (hours)",
           "minimum_baseline_samples": "Minimum samples before anomaly detection",
@@ -18,6 +19,7 @@
         },
         "data_description": {
           "ai_task_entity": "Choose a configured AI Task provider or leave blank to use Home Assistant's preferred provider.",
+          "discovery_interval_hours": "The Observer collects only change counts between reviews, then asks the AI to reevaluate the useful device and entity set.",
           "learning_only": "When enabled, observations and summaries are stored but anomaly notifications are suppressed.",
           "lookback_hours": "How much recent activity is included in each scheduled summary.",
           "minimum_baseline_samples": "An entity must have this many observations before it can produce a numeric deviation candidate.",
@@ -32,26 +34,36 @@
       },
       "entities": {
         "data": {
+          "always_monitor_devices": "Always monitor these devices",
+          "always_monitor_entities": "Always monitor these entities",
+          "auto_discovery": "Automatically discover important devices",
           "access_entities": "Doors and locks",
           "activity_entities": "Motion and activity",
           "energy_entities": "Energy and power",
           "hvac_entities": "HVAC and room temperature",
           "network_entities": "Internet and network",
+          "never_monitor_devices": "Never monitor these devices",
+          "never_monitor_entities": "Never monitor these entities",
           "occupancy_entities": "Occupancy indicators",
           "reservation_entities": "Reservation context entities",
           "spa_entities": "Hot tub and spa"
         },
         "data_description": {
+          "always_monitor_devices": "User override: eligible entities from these devices are monitored even if the AI does not recommend them.",
+          "always_monitor_entities": "User override: these individual entities are monitored even if the AI does not recommend them.",
+          "auto_discovery": "Review eligible entities by room and device, learn how often they change, and let the configured AI choose a minimal useful set.",
           "access_entities": "Door contacts, exterior locks, and related access indicators.",
           "activity_entities": "Motion, presence, appliance use, or other indicators of household activity.",
           "energy_entities": "Whole-home and important circuit power sensors, including Emporia entities.",
           "hvac_entities": "Thermostats, mini-splits, temperature sensors, and HVAC operating states.",
           "network_entities": "Starlink connectivity, latency, throughput, and router availability.",
+          "never_monitor_devices": "User override: entities belonging to these devices are never monitored. This override always wins.",
+          "never_monitor_entities": "User override: these individual entities are never monitored. This override always wins.",
           "occupancy_entities": "Non-camera occupancy estimates or presence helpers.",
           "reservation_entities": "Calendar or helper entities that describe the current stay.",
           "spa_entities": "Gecko water temperature, setpoint, heater, pump, filter, ozone, and spa power entities."
         },
-        "description": "Only selected entities are observed. Put each entity in the category that best describes its operational meaning.",
+        "description": "Leave the manual categories blank to let automatic discovery choose. Always and never overrides take precedence over AI recommendations.",
         "title": "Choose entities"
       },
       "user": {
@@ -83,6 +95,9 @@
       "learned_baselines": {
         "name": "Learned baselines"
       },
+      "discovered_devices": {
+        "name": "Discovered devices"
+      },
       "status": {
         "name": "Status"
       }
@@ -95,12 +110,18 @@
           "access_entities": "Doors and locks",
           "activity_entities": "Motion and activity",
           "ai_task_entity": "AI Task entity (optional)",
+          "always_monitor_devices": "Always monitor these devices",
+          "always_monitor_entities": "Always monitor these entities",
+          "auto_discovery": "Automatically discover important devices",
+          "discovery_interval_hours": "Reevaluate devices every (hours)",
           "energy_entities": "Energy and power",
           "hvac_entities": "HVAC and room temperature",
           "learning_only": "Learning-only mode",
           "lookback_hours": "Daily summary lookback (hours)",
           "minimum_baseline_samples": "Minimum samples before anomaly detection",
           "network_entities": "Internet and network",
+          "never_monitor_devices": "Never monitor these devices",
+          "never_monitor_entities": "Never monitor these entities",
           "notify_daily_summary": "Send the daily summary",
           "notify_service": "Notification action (optional)",
           "occupancy_entities": "Occupancy indicators",
@@ -111,7 +132,13 @@
           "zscore_threshold": "Numeric anomaly sensitivity"
         },
         "data_description": {
+          "always_monitor_devices": "User override: eligible entities from these devices are always monitored.",
+          "always_monitor_entities": "User override: these entities are always monitored.",
+          "auto_discovery": "When enabled, AI recommendations are reevaluated on the configured interval.",
+          "discovery_interval_hours": "Change counts are kept locally between reviews. The default is once per week.",
           "learning_only": "Disable only after reviewing several summaries and learned behavior.",
+          "never_monitor_devices": "User override: entities belonging to these devices are never monitored. This always wins.",
+          "never_monitor_entities": "User override: these entities are never monitored. This always wins.",
           "notify_service": "Use a full action name such as notify.mobile_app_phone."
         },
         "description": "Changes reload the observer automatically.",
@@ -120,6 +147,10 @@
     }
   },
   "services": {
+    "discover_entities": {
+      "description": "Inventory eligible entities by area and ask the AI provider to choose a minimal useful monitoring set.",
+      "name": "Discover important devices"
+    },
     "generate_summary": {
       "description": "Generate and store an operational summary now.",
       "name": "Generate summary"
@@ -135,4 +166,3 @@
   },
   "title": "House Observer"
 }
-

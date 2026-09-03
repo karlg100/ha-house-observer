@@ -10,6 +10,8 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlowResult, OptionsF
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    DeviceSelector,
+    DeviceSelectorConfig,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -25,12 +27,18 @@ from .const import (
     CONF_ACCESS_ENTITIES,
     CONF_ACTIVITY_ENTITIES,
     CONF_AI_TASK_ENTITY,
+    CONF_ALWAYS_MONITOR_DEVICES,
+    CONF_ALWAYS_MONITOR_ENTITIES,
+    CONF_AUTO_DISCOVERY,
+    CONF_DISCOVERY_INTERVAL_HOURS,
     CONF_ENERGY_ENTITIES,
     CONF_HVAC_ENTITIES,
     CONF_LEARNING_ONLY,
     CONF_LOOKBACK_HOURS,
     CONF_MIN_SAMPLES,
     CONF_NETWORK_ENTITIES,
+    CONF_NEVER_MONITOR_DEVICES,
+    CONF_NEVER_MONITOR_ENTITIES,
     CONF_NOTIFY_DAILY,
     CONF_NOTIFY_SERVICE,
     CONF_OCCUPANCY_ENTITIES,
@@ -40,6 +48,8 @@ from .const import (
     CONF_SPA_ENTITIES,
     CONF_SUMMARY_TIME,
     CONF_ZSCORE_THRESHOLD,
+    DEFAULT_AUTO_DISCOVERY,
+    DEFAULT_DISCOVERY_INTERVAL_HOURS,
     DEFAULT_LEARNING_ONLY,
     DEFAULT_LOOKBACK_HOURS,
     DEFAULT_MIN_SAMPLES,
@@ -63,6 +73,17 @@ def _entities_schema() -> vol.Schema:
     """Return the semantic entity grouping schema."""
     return vol.Schema(
         {
+            vol.Required(
+                CONF_AUTO_DISCOVERY, default=DEFAULT_AUTO_DISCOVERY
+            ): BooleanSelector(),
+            vol.Optional(CONF_ALWAYS_MONITOR_DEVICES): DeviceSelector(
+                DeviceSelectorConfig(multiple=True)
+            ),
+            vol.Optional(CONF_NEVER_MONITOR_DEVICES): DeviceSelector(
+                DeviceSelectorConfig(multiple=True)
+            ),
+            vol.Optional(CONF_ALWAYS_MONITOR_ENTITIES): _entity_selector(),
+            vol.Optional(CONF_NEVER_MONITOR_ENTITIES): _entity_selector(),
             vol.Optional(CONF_ACTIVITY_ENTITIES): _entity_selector(),
             vol.Optional(CONF_ACCESS_ENTITIES): _entity_selector(),
             vol.Optional(CONF_OCCUPANCY_ENTITIES): _entity_selector(),
@@ -109,6 +130,14 @@ def _behavior_schema() -> vol.Schema:
             ): NumberSelector(
                 NumberSelectorConfig(
                     min=2, max=10, step=0.1, mode=NumberSelectorMode.BOX
+                )
+            ),
+            vol.Required(
+                CONF_DISCOVERY_INTERVAL_HOURS,
+                default=DEFAULT_DISCOVERY_INTERVAL_HOURS,
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=24, max=720, step=24, mode=NumberSelectorMode.BOX
                 )
             ),
             vol.Required(

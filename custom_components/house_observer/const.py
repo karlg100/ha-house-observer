@@ -28,6 +28,12 @@ CONF_NOTIFY_SERVICE: Final = "notify_service"
 CONF_NOTIFY_DAILY: Final = "notify_daily_summary"
 CONF_MIN_SAMPLES: Final = "minimum_baseline_samples"
 CONF_ZSCORE_THRESHOLD: Final = "zscore_threshold"
+CONF_AUTO_DISCOVERY: Final = "auto_discovery"
+CONF_DISCOVERY_INTERVAL_HOURS: Final = "discovery_interval_hours"
+CONF_ALWAYS_MONITOR_DEVICES: Final = "always_monitor_devices"
+CONF_NEVER_MONITOR_DEVICES: Final = "never_monitor_devices"
+CONF_ALWAYS_MONITOR_ENTITIES: Final = "always_monitor_entities"
+CONF_NEVER_MONITOR_ENTITIES: Final = "never_monitor_entities"
 
 ENTITY_GROUPS: Final = (
     CONF_ACTIVITY_ENTITIES,
@@ -59,6 +65,8 @@ DEFAULT_LEARNING_ONLY: Final = True
 DEFAULT_NOTIFY_DAILY: Final = False
 DEFAULT_MIN_SAMPLES: Final = 30
 DEFAULT_ZSCORE_THRESHOLD: Final = 3.5
+DEFAULT_AUTO_DISCOVERY: Final = True
+DEFAULT_DISCOVERY_INTERVAL_HOURS: Final = 168
 DEFAULT_EVENT_DEBOUNCE_SECONDS: Final = 300
 DEFAULT_MAX_EVENTS: Final = 5000
 DEFAULT_MAX_SUMMARIES: Final = 120
@@ -70,6 +78,7 @@ STORAGE_KEY_PREFIX: Final = f"{DOMAIN}."
 SERVICE_GENERATE_SUMMARY: Final = "generate_summary"
 SERVICE_RECORD_NOTE: Final = "record_note"
 SERVICE_SET_STAY_CONTEXT: Final = "set_stay_context"
+SERVICE_DISCOVER_ENTITIES: Final = "discover_entities"
 
 ATTR_CONFIG_ENTRY_ID: Final = "config_entry_id"
 ATTR_HOURS: Final = "hours"
