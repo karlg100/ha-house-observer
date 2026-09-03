@@ -15,12 +15,12 @@ is plentiful but useful operational context is hard to see.
 
 ## Current status
 
-Version `0.2.0-beta.5` is the current testing release. It adds deterministic
-Home Assistant binary-sensor semantics and privacy-safe reservation timing to
-the experimental AI-assisted discovery mode. Learning-only mode is enabled by
-default, and
-proactive anomaly notifications remain suppressed until you explicitly disable
-it.
+Version `0.2.0-beta.6` is the current testing release. It adds a progressive
+entity-discovery schedule during the Observer's initial learning period, along
+with the deterministic binary-sensor semantics and privacy-safe reservation
+timing introduced in the previous betas. Learning-only mode is enabled by
+default, and proactive anomaly notifications remain suppressed until you
+explicitly disable it.
 
 ## What it does
 
@@ -83,7 +83,9 @@ stored summaries and baseline candidates before enabling proactive alerts.
 
 On the experimental discovery branch, leave the manual category fields blank
 and enable **Automatically discover important devices**. The first discovery
-runs shortly after setup. The Observer reevaluates weekly by default.
+runs shortly after setup. Successful AI discovery is then repeated after about
+24 hours, on day 3, and on day 7 before settling into the configured interval,
+which is weekly by default. Failed AI discovery attempts retry daily.
 
 ## Automatic device discovery (experimental branch)
 
@@ -109,6 +111,11 @@ User overrides always take precedence:
 Recommendations and reasons appear on the **Discovered devices** diagnostic
 sensor. You can also run discovery immediately from **Settings > Tools >
 Actions** with `house_observer.discover_entities`.
+
+The **Discovered devices** sensor also shows the next scheduled review and the
+current schedule phase. Entity, device, or area registry changes queue a fresh
+review after a one-hour settling period, so newly added equipment can be
+considered without waiting for the regular interval.
 
 ## AI Task setup
 
