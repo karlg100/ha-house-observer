@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="custom_components/house_observer/brand/icon@2x.png" alt="House Observer icon" width="192">
+</p>
+
 # House Observer for Home Assistant
 
 House Observer converts selected Home Assistant telemetry into a small, local,
