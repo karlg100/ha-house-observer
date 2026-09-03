@@ -15,9 +15,9 @@ is plentiful but useful operational context is hard to see.
 
 ## Current status
 
-Version `0.2.0-beta.6` is the current testing release. It adds a progressive
-entity-discovery schedule during the Observer's initial learning period, along
-with the deterministic binary-sensor semantics and privacy-safe reservation
+Version `0.2.0-beta.7` is the current testing release. It adds persistent owner
+guidance for AI summaries. It also includes the progressive entity-discovery
+schedule, deterministic binary-sensor semantics, and privacy-safe reservation
 timing introduced in the previous betas. Learning-only mode is enabled by
 default, and proactive anomaly notifications remain suppressed until you
 explicitly disable it.
@@ -40,6 +40,7 @@ explicitly disable it.
   action and returns structured response data.
 - Uses a configured `ai_task` entity, or Home Assistant's preferred AI Task
   entity, without tying the integration to one AI vendor.
+- Includes optional persistent owner guidance with every AI summary.
 - Falls back to a deterministic summary when AI Task is unavailable.
 - Stores reservation context without creating a permanent guest dossier.
 - Normalizes configured reservation start/end times locally, including exact
@@ -126,6 +127,28 @@ to use Home Assistant's preferred AI Task entity.
 
 When no `ai_task.generate_data` action is available, House Observer records a
 deterministic summary containing event and deviation counts instead.
+
+## Persistent observer guidance
+
+Open **Settings > Devices & services > House Observer > Configure** and use
+**Persistent observer guidance** for property-specific analysis priorities.
+The text is included with every AI-generated summary and remains configured
+until you edit or remove it. Clear the field and submit the form to remove the
+guidance.
+
+For example:
+
+```text
+Pay particular attention to whole-house power usage between 4:00 PM and
+8:00 PM local time. Report sustained high demand, when it occurred, how long
+it lasted, and whether the supplied evidence differs meaningfully from learned
+behavior. Do not treat a single short spike as an anomaly.
+```
+
+Guidance focuses the model's analysis but does not override House Observer's
+evidence, privacy, safety, or notification rules. The status sensor and
+downloadable diagnostics indicate whether guidance is configured without
+exposing its contents.
 
 ## Entities
 
