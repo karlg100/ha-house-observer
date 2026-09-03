@@ -32,3 +32,9 @@ def patterns_module():
 def models_module():
     """Return the pure storage models module."""
     return _load_module("house_observer_models", "models.py")
+
+
+@pytest.fixture(scope="session")
+def discovery_module():
+    """Return the pure automatic-discovery module."""
+    return _load_module("house_observer_discovery", "discovery.py")

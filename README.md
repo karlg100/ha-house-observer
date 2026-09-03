@@ -15,13 +15,18 @@ is plentiful but useful operational context is hard to see.
 
 ## Current status
 
-Version `0.1.0` is an observation-first release. Learning-only mode is enabled
-by default, and proactive anomaly notifications remain suppressed until you
-explicitly disable it.
+Version `0.1.1` is the current observation-first release. Version
+`0.2.0-beta.1` on the `automatic-device-discovery` branch adds an experimental
+AI-assisted discovery mode. Learning-only mode is enabled by default, and
+proactive anomaly notifications remain suppressed until you explicitly disable
+it.
 
 ## What it does
 
-- Watches only the entities you select.
+- Watches only the effective entity set selected manually, recommended by
+  discovery, or required by user overrides.
+- On the experimental branch, inventories eligible entities by Home Assistant
+  area and device, then asks the configured AI for a minimal useful set.
 - Groups entities by operational meaning: activity, access, occupancy, spa,
   HVAC, Internet, energy, and reservation context.
 - Debounces high-frequency numeric telemetry before storing it.
@@ -71,6 +76,35 @@ good first candidates are:
 Keep **Learning-only mode** enabled for several representative stays. Review the
 stored summaries and baseline candidates before enabling proactive alerts.
 
+On the experimental discovery branch, leave the manual category fields blank
+and enable **Automatically discover important devices**. The first discovery
+runs shortly after setup. The Observer reevaluates weekly by default.
+
+## Automatic device discovery (experimental branch)
+
+Discovery is deliberately separate from anomaly detection and summary writing:
+
+1. Home Assistant registries provide entity, device, and area metadata.
+2. A local filter excludes private or unhelpful domains such as people, device
+   trackers, cameras, images, scripts, and automations.
+3. Between reviews, the Observer stores only a change count for each eligible
+   candidate. It does not retain the candidate's raw state-change history.
+4. The configured AI Task provider reviews a bounded inventory grouped by area
+   and recommends the smallest useful set of entities.
+5. The Observer validates every returned entity ID against the supplied
+   inventory before monitoring it.
+
+User overrides always take precedence:
+
+- **Always monitor these devices/entities** adds operational signals even when
+  the AI does not select them.
+- **Never monitor these devices/entities** removes signals even when they were
+  manually selected or recommended by the AI.
+
+Recommendations and reasons appear on the **Discovered devices** diagnostic
+sensor. You can also run discovery immediately from **Settings > Tools >
+Actions** with `house_observer.discover_entities`.
+
 ## AI Task setup
 
 House Observer does not include an AI model or require a particular provider.
@@ -106,6 +140,17 @@ response_variable: observer_result
 The response includes `summary`, `severity`, `confidence`, `observations`,
 `anomalies`, `maintenance_notes`, `candidate_memories`, `notify_owner`, and
 metadata about when and why it was generated.
+
+### Discover important devices now
+
+```yaml
+action: house_observer.discover_entities
+response_variable: discovery_result
+```
+
+The response lists the areas, devices, entity IDs, operational categories, and
+reasons selected by the AI. When AI Task is unavailable or returns no valid
+IDs, a conservative local fallback is used.
 
 ### Record a property note
 
@@ -162,9 +207,13 @@ notification policy.
 ## Memory and privacy
 
 - Event history and learned aggregates remain in the Home Assistant instance.
-- Only selected entities are observed.
+- Only the effective monitored set retains state transitions.
+- Automatic discovery retains candidate change counts locally between reviews.
+- Discovery sends a bounded, area-grouped inventory to the configured AI Task
+  provider only when a discovery review runs.
 - A deliberately small allowlist of state attributes is retained.
-- Camera images, audio, people names, and device context are not collected.
+- Cameras, images, people, device trackers, audio, scripts, and automations are
+  excluded from automatic discovery.
 - Event retention defaults to 45 days and is capped at 5,000 events.
 - Aggregate patterns survive event pruning so the property can learn over time.
 - AI prompts explicitly prohibit identities, motives, protected
@@ -174,7 +223,7 @@ notification policy.
 Selected telemetry is sent to the configured AI Task provider whenever an AI
 summary is generated. The provider's own privacy and retention terms apply.
 
-## Known limits in 0.1.0
+## Known limits
 
 - Baselines are per entity. Weather-normalized spa recovery and cross-sensor
   energy correlation are planned, but not yet implemented.
@@ -182,6 +231,8 @@ summary is generated. The provider's own privacy and retention terms apply.
   transparent clue generator, not a fault diagnosis.
 - Reservation context must be supplied by an automation or action call.
 - The integration does not yet provide a dedicated dashboard card.
+- Discovery recommendations are reviewed through a diagnostic sensor and the
+  standard integration options rather than a dedicated recommendation card.
 
 ## Development
 
@@ -196,4 +247,3 @@ python scripts/validate_repo.py
 ## License
 
 MIT
-
