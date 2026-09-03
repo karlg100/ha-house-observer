@@ -16,7 +16,7 @@ is plentiful but useful operational context is hard to see.
 ## Current status
 
 Version `0.1.1` is the current observation-first release. Version
-`0.2.0-beta.1` on the `automatic-device-discovery` branch adds an experimental
+`0.2.0-beta.2` on the `automatic-device-discovery` branch adds an experimental
 AI-assisted discovery mode. Learning-only mode is enabled by default, and
 proactive anomaly notifications remain suppressed until you explicitly disable
 it.
