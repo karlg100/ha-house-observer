@@ -38,3 +38,9 @@ def models_module():
 def discovery_module():
     """Return the pure automatic-discovery module."""
     return _load_module("house_observer_discovery", "discovery.py")
+
+
+@pytest.fixture(scope="session")
+def reservations_module():
+    """Return the pure reservation-normalization module."""
+    return _load_module("house_observer_reservations", "reservations.py")
