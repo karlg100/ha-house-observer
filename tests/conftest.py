@@ -44,3 +44,9 @@ def discovery_module():
 def reservations_module():
     """Return the pure reservation-normalization module."""
     return _load_module("house_observer_reservations", "reservations.py")
+
+
+@pytest.fixture(scope="session")
+def semantics_module():
+    """Return the pure entity-semantics module."""
+    return _load_module("house_observer_semantics", "semantics.py")
