@@ -45,6 +45,7 @@ from .const import (
     CONF_NOTIFY_DAILY,
     CONF_NOTIFY_SERVICE,
     CONF_PROPERTY_NAME,
+    CONF_RESERVATION_ENTITIES,
     CONF_RETENTION_DAYS,
     CONF_SUMMARY_TIME,
     CONF_ZSCORE_THRESHOLD,
@@ -77,6 +78,12 @@ from .discovery import (
 )
 from .models import ObservationEvent, ObserverSummary
 from .patterns import PatternEngine, numeric_value
+from .reservations import (
+    RESERVATION_CHANGED,
+    is_reservation_state,
+    normalize_reservations,
+    safe_reservation_attributes,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -293,6 +300,7 @@ class HouseObserver:
 
         self._prune()
         self._refresh_discovery_candidates()
+        self._scrub_reservation_memory()
         self._rebind_observation_listener()
         if self.options[CONF_AUTO_DISCOVERY]:
             if self._discovery_candidates:
@@ -365,6 +373,9 @@ class HouseObserver:
         area_registry = ar.async_get(self.hass)
         candidates: list[DiscoveryCandidate] = []
         self._entity_devices = {}
+        configured_reservations = set(
+            self.options.get(CONF_RESERVATION_ENTITIES, [])
+        )
 
         for entry in entity_registry.entities.values():
             if (
@@ -391,7 +402,13 @@ class HouseObserver:
             candidate = DiscoveryCandidate(
                 entity_id=entry.entity_id,
                 name=state.name,
-                state=state.state,
+                state=(
+                    RESERVATION_CHANGED
+                    if is_reservation_state(
+                        entry.entity_id, state.attributes, configured_reservations
+                    )
+                    else state.state
+                ),
                 domain=entry.entity_id.split(".", 1)[0],
                 device_class=str(device_class) if device_class else None,
                 unit=state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
@@ -409,6 +426,39 @@ class HouseObserver:
         self._discovery_candidates = {
             item.entity_id: item for item in eligible_candidates(candidates)
         }
+
+    def _scrub_reservation_memory(self) -> None:
+        """Remove booking and guest details retained by earlier versions."""
+        configured = set(self.options.get(CONF_RESERVATION_ENTITIES, []))
+        reservation_ids = set(configured)
+        candidate_ids = {
+            event.entity_id for event in self.events
+        } | set(self.patterns.entities)
+        for entity_id in candidate_ids:
+            state = self.hass.states.get(entity_id)
+            if state is not None and is_reservation_state(
+                entity_id, state.attributes, configured
+            ):
+                reservation_ids.add(entity_id)
+
+        for observation in self.events:
+            if (
+                observation.category == "reservation"
+                or observation.entity_id in reservation_ids
+            ):
+                observation.category = "reservation"
+                observation.old_state = (
+                    RESERVATION_CHANGED if observation.old_state is not None else None
+                )
+                observation.new_state = RESERVATION_CHANGED
+                observation.attributes = {}
+
+        for entity_id in reservation_ids:
+            record = self.patterns.entities.get(entity_id)
+            if not record:
+                continue
+            count = sum(int(value) for value in record.get("state_counts", {}).values())
+            record["state_counts"] = ({RESERVATION_CHANGED: count} if count else {})
 
     @callback
     def _rebind_observation_listener(self) -> None:
@@ -583,7 +633,29 @@ class HouseObserver:
             return
 
         observed_at = dt_util.as_local(new_state.last_updated)
-        numeric = numeric_value(new_state.state)
+        configured_reservations = set(
+            self.options.get(CONF_RESERVATION_ENTITIES, [])
+        )
+        reservation = is_reservation_state(
+            new_state.entity_id, new_state.attributes, configured_reservations
+        )
+        category = (
+            "reservation" if reservation else self._category_for(new_state.entity_id)
+        )
+        observed_state = RESERVATION_CHANGED if reservation else new_state.state
+        observed_old_state = (
+            RESERVATION_CHANGED
+            if reservation and old_state is not None
+            else old_state.state
+            if old_state is not None
+            else None
+        )
+        attributes = (
+            safe_reservation_attributes(new_state.attributes)
+            if reservation
+            else self._safe_attributes(new_state)
+        )
+        numeric = numeric_value(observed_state)
         if numeric is not None and self._debounce_numeric(
             new_state.entity_id, observed_at, numeric
         ):
@@ -591,17 +663,17 @@ class HouseObserver:
 
         async with self._lock:
             anomaly = self.patterns.observe(
-                new_state.entity_id, new_state.state, observed_at
+                new_state.entity_id, observed_state, observed_at
             )
             observation = ObservationEvent(
                 timestamp=observed_at.isoformat(),
                 entity_id=new_state.entity_id,
                 name=str(new_state.attributes.get(ATTR_FRIENDLY_NAME, new_state.name)),
-                category=self._category_for(new_state.entity_id),
-                old_state=old_state.state if old_state else None,
-                new_state=new_state.state,
+                category=category,
+                old_state=observed_old_state,
+                new_state=observed_state,
                 unit=new_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
-                attributes=self._safe_attributes(new_state),
+                attributes=attributes,
                 anomaly=anomaly,
             )
             self.events.append(observation)
@@ -798,6 +870,7 @@ class HouseObserver:
 
     def _build_context(self, hours: int) -> dict[str, Any]:
         """Build a compact context object for the model."""
+        now = dt_util.now()
         recent = self.events_since(hours)
         category_counts: dict[str, int] = {}
         anomaly_count = 0
@@ -806,8 +879,22 @@ class HouseObserver:
             anomaly_count += event.anomaly is not None
 
         current_states: list[dict[str, Any]] = []
+        reservation_values: list[dict[str, Any]] = []
+        configured_reservations = set(
+            self.options.get(CONF_RESERVATION_ENTITIES, [])
+        )
         for entity_id in self.tracked_entities:
             if state := self.hass.states.get(entity_id):
+                if is_reservation_state(
+                    entity_id, state.attributes, configured_reservations
+                ):
+                    reservation_values.append(
+                        {
+                            "entity_id": entity_id,
+                            "attributes": state.attributes,
+                        }
+                    )
+                    continue
                 current_states.append(
                     {
                         "entity_id": entity_id,
@@ -819,10 +906,19 @@ class HouseObserver:
                     }
                 )
 
-        event_payload = [event.as_dict() for event in recent[-250:]]
+        event_payload: list[dict[str, Any]] = []
+        for event in recent[-250:]:
+            payload = event.as_dict()
+            if event.category == "reservation":
+                payload["old_state"] = (
+                    RESERVATION_CHANGED if event.old_state is not None else None
+                )
+                payload["new_state"] = RESERVATION_CHANGED
+                payload["attributes"] = {}
+            event_payload.append(payload)
         return {
             "property": self.property_name,
-            "generated_at": dt_util.now().isoformat(),
+            "generated_at": now.isoformat(),
             "period_hours": hours,
             "learning_only": self.learning_only,
             "stay_context": self.stay_context,
@@ -831,6 +927,7 @@ class HouseObserver:
             "category_counts": category_counts,
             "anomaly_count": anomaly_count,
             "current_states": current_states,
+            "reservations": normalize_reservations(reservation_values, now),
             "recent_events": event_payload,
             "learned_baselines": self.patterns.baseline_context(),
         }
@@ -853,7 +950,10 @@ class HouseObserver:
             "non-urgent observation, and NORMAL otherwise. Candidate memories must be "
             "general property patterns supported by repeated evidence, never dossiers "
             "on "
-            "individual guests. Keep the summary concise and practical.\n\n"
+            "individual guests. Reservation timing is calculated locally. Use its "
+            "status, relative_day, start_day_offset, and minute fields exactly as "
+            "provided. Never recalculate or substitute a different calendar day. "
+            "Keep the summary concise and practical.\n\n"
             f"Summary reason: {reason}\n"
             "Telemetry JSON:\n"
             f"{json.dumps(context, separators=(',', ':'), default=str)}"
