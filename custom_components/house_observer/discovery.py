@@ -5,7 +5,32 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
 from typing import Any
+
+DISCOVERY_RETRY_HOURS = 24
+DISCOVERY_BOOTSTRAP_MILESTONES_HOURS = (24, 72, 168)
+
+
+def next_discovery_due(
+    *,
+    last_run: datetime,
+    bootstrap_started_at: datetime,
+    successful_ai_runs: int,
+    ai_generated: bool,
+    configured_interval_hours: int,
+) -> datetime:
+    """Return the next AI discovery review time."""
+    if not ai_generated:
+        return last_run + timedelta(hours=DISCOVERY_RETRY_HOURS)
+
+    configured_due = last_run + timedelta(hours=configured_interval_hours)
+    if 1 <= successful_ai_runs <= len(DISCOVERY_BOOTSTRAP_MILESTONES_HOURS):
+        milestone_due = bootstrap_started_at + timedelta(
+            hours=DISCOVERY_BOOTSTRAP_MILESTONES_HOURS[successful_ai_runs - 1]
+        )
+        return min(configured_due, milestone_due)
+    return configured_due
 
 DISCOVERY_CATEGORIES = {
     "access",
