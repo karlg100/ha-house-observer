@@ -4,7 +4,7 @@ requires = ["setuptools>=75"]
 
 [project]
 name = "ha-house-observer"
-version = "0.2.0-beta.1"
+version = "0.2.0-beta.2"
 description = "Local operational memory and AI summaries for Home Assistant"
 requires-python = ">=3.13"
 license = "MIT"
