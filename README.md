@@ -15,9 +15,10 @@ is plentiful but useful operational context is hard to see.
 
 ## Current status
 
-Version `0.2.0-beta.4` is the current testing release. It adds privacy-safe,
-deterministic reservation timing to the experimental AI-assisted discovery
-mode. Learning-only mode is enabled by default, and
+Version `0.2.0-beta.5` is the current testing release. It adds deterministic
+Home Assistant binary-sensor semantics and privacy-safe reservation timing to
+the experimental AI-assisted discovery mode. Learning-only mode is enabled by
+default, and
 proactive anomaly notifications remain suppressed until you explicitly disable
 it.
 
@@ -43,6 +44,8 @@ it.
 - Stores reservation context without creating a permanent guest dossier.
 - Normalizes configured reservation start/end times locally, including exact
   day and minute offsets, before they reach the AI provider.
+- Converts binary sensor states into device-class-aware meanings before AI
+  analysis, such as `problem: off` becoming `normal` rather than “powered off.”
 - Exposes status, recent event/anomaly counts, learned baseline count, active
   stay, and latest summary sensors.
 
