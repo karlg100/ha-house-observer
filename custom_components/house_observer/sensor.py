@@ -95,6 +95,7 @@ class ObserverStatusSensor(ObserverSensorBase):
             "tracked_entities": len(self.manager.tracked_entities),
             "retained_events": len(self.manager.events),
             "retained_summaries": len(self.manager.summaries),
+            "guidance_configured": bool(self.manager.observer_guidance),
         }
 
 
