@@ -29,4 +29,6 @@ async def async_get_config_entry_diagnostics(
         "zscore_threshold": options.get("zscore_threshold"),
         "notification_configured": bool(options.get("notify_service")),
         "ai_task_configured": bool(options.get("ai_task_entity")),
+        "guidance_configured": bool(manager.observer_guidance),
+        "guidance_length": len(manager.observer_guidance),
     }
