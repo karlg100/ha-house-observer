@@ -113,7 +113,9 @@ _AI_STRUCTURE: dict[str, Any] = {
     "confidence": {
         "description": "Confidence from zero to one.",
         "required": True,
-        "selector": {"number": {"min": 0, "max": 1, "step": 0.01}},
+        # Anthropic structured output rejects JSON Schema numeric bounds.
+        # _as_confidence applies the range locally after generation.
+        "selector": {"number": {}},
     },
     "observations": {
         "description": "Important observations, one per line.",
@@ -151,7 +153,8 @@ _DISCOVERY_AI_STRUCTURE: dict[str, Any] = {
     "confidence": {
         "description": "Overall confidence from zero to one.",
         "required": True,
-        "selector": {"number": {"min": 0, "max": 1, "step": 0.01}},
+        # parse_recommendations applies the range locally after generation.
+        "selector": {"number": {}},
     },
 }
 
