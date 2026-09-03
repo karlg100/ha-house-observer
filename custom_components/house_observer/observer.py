@@ -100,9 +100,15 @@ _AI_STRUCTURE: dict[str, Any] = {
         "selector": {"text": {"multiline": True}},
     },
     "severity": {
-        "description": "Overall operational severity.",
+        "description": (
+            "Overall operational severity. Return exactly one of: "
+            "normal, note, watch, action."
+        ),
         "required": True,
-        "selector": {"select": {"options": list(SEVERITIES)}},
+        # Keep this as text instead of a select selector. Some AI Task providers
+        # reject Home Assistant's generated enum schema even when its options
+        # are valid. The returned value is validated against SEVERITIES below.
+        "selector": {"text": {}},
     },
     "confidence": {
         "description": "Confidence from zero to one.",
@@ -654,8 +660,16 @@ class HouseObserver:
         context = self._build_context(period_hours)
         result: dict[str, Any] | None = None
         ai_generated = False
+        fallback_observation = (
+            "The ai_task.generate_data action is unavailable; this is a "
+            "deterministic summary."
+        )
 
         if self.hass.services.has_service("ai_task", "generate_data"):
+            fallback_observation = (
+                "AI Task returned an unexpected response; this is a deterministic "
+                "summary. Check the Home Assistant logs for details."
+            )
             service_data: dict[str, Any] = {
                 "task_name": f"{self.property_name} house observer summary",
                 "instructions": self._build_prompt(context, reason),
@@ -677,10 +691,14 @@ class HouseObserver:
                     result = response["data"]
                     ai_generated = True
             except (HomeAssistantError, TimeoutError, ValueError):
+                fallback_observation = (
+                    "The AI Task request failed; this is a deterministic summary. "
+                    "Check the Home Assistant logs for details."
+                )
                 _LOGGER.exception("Unable to generate House Observer AI summary")
 
         if result is None:
-            result = self._fallback_summary(context)
+            result = self._fallback_summary(context, fallback_observation)
 
         severity = str(result.get("severity", "normal")).lower()
         if severity not in SEVERITIES:
@@ -839,7 +857,9 @@ class HouseObserver:
         )
 
     @staticmethod
-    def _fallback_summary(context: dict[str, Any]) -> dict[str, Any]:
+    def _fallback_summary(
+        context: dict[str, Any], fallback_observation: str
+    ) -> dict[str, Any]:
         """Create a deterministic summary if no AI Task provider is available."""
         event_count = int(context["event_count"])
         anomaly_count = int(context["anomaly_count"])
@@ -858,7 +878,7 @@ class HouseObserver:
             ),
             "severity": "watch" if anomaly_count else "normal",
             "confidence": 0.5,
-            "observations": "AI Task is unavailable; this is a deterministic summary.",
+            "observations": fallback_observation,
             "anomalies": (
                 f"{anomaly_count} numeric baseline deviation candidates."
                 if anomaly_count
