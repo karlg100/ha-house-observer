@@ -15,8 +15,9 @@ is plentiful but useful operational context is hard to see.
 
 ## Current status
 
-Version `0.2.0-beta.3` is the current testing release and adds an experimental
-AI-assisted discovery mode. Learning-only mode is enabled by default, and
+Version `0.2.0-beta.4` is the current testing release. It adds privacy-safe,
+deterministic reservation timing to the experimental AI-assisted discovery
+mode. Learning-only mode is enabled by default, and
 proactive anomaly notifications remain suppressed until you explicitly disable
 it.
 
@@ -40,6 +41,8 @@ it.
   entity, without tying the integration to one AI vendor.
 - Falls back to a deterministic summary when AI Task is unavailable.
 - Stores reservation context without creating a permanent guest dossier.
+- Normalizes configured reservation start/end times locally, including exact
+  day and minute offsets, before they reach the AI provider.
 - Exposes status, recent event/anomaly counts, learned baseline count, active
   stay, and latest summary sensors.
 
@@ -211,6 +214,9 @@ notification policy.
 - Discovery sends a bounded, area-grouped inventory to the configured AI Task
   provider only when a discovery review runs.
 - A deliberately small allowlist of state attributes is retained.
+- Reservation states are replaced with locally calculated, schedule-only
+  context. Guest names, booking numbers, contact details, access codes, notes,
+  and private calendar URLs are excluded from AI prompts and retained events.
 - Cameras, images, people, device trackers, audio, scripts, and automations are
   excluded from automatic discovery.
 - Event retention defaults to 45 days and is capped at 5,000 events.
