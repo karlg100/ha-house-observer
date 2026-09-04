@@ -24,21 +24,37 @@ operations without making rentals a requirement.
 A representative summary returned by `house_observer.generate_summary`:
 
 ```yaml
+timestamp: "2026-09-03T18:18:43.653031-04:00"
+reason: manual
+period_hours: 24
 summary: >-
-  The home was mostly quiet overnight. Upstairs temperature remained 4.8 °F
-  above its learned range for 47 minutes while HVAC action stayed idle.
+  The home shows apparent occupancy activity on the main and kitchen floors.
+  Whole-house power was elevated from 17:22–17:55, averaging 1,700 W—slightly
+  below the 1,815 W baseline—and spiked again from 18:06–18:11 to approximately
+  2,100–2,200 W. The spike was driven primarily by a sustained increase on the
+  freezer/server/bathroom circuit to 580 W, compared with a 215 W baseline. The
+  circuit returned to approximately 150 W by 18:17, and whole-house power was
+  declining. Room-level presence sensors remained away. No safety or device
+  faults were detected.
 severity: watch
-confidence: 0.91
+confidence: 0.68
 observations: |-
-  Exterior doors remained closed overnight.
-  Whole-home power stayed within its learned range.
+  Main-floor and kitchen occupancy sensors show occupied; individual room sensors remain away.
+  The freezer/server/bathroom circuit sustained approximately 580 W from 18:06–18:11.
+  Whole-house power averaged 1,700 W from 17:22–17:55, below its 1,815 W baseline.
+  The living-room AC is cooling toward its 74 °F target; other climate units are idle.
+  The media-cabinet lock has been unlocked since 17:26; other access points are normal.
 anomalies: |-
-  Upstairs temperature exceeded its learned range from 6:12 AM to 6:59 AM.
+  Freezer/server/bathroom circuit reached 2.7 times its baseline from 18:06–18:11,
+  unexplained by observed occupancy or reported device operation.
 maintenance_notes: |-
-  Check the upstairs thermostat schedule if this pattern repeats.
+  Confirm the freezer/server/bathroom circuit's expected load. If the high draw
+  recurs, inspect the connected equipment and circuit.
 candidate_memories: |-
-  Upstairs temperature normally begins rising after 7:00 AM.
-notify_owner: true
+  Whole-house power has an afternoon/evening baseline near 1,815 W; readings above
+  2,200 W warrant checking the freezer/server/bathroom circuit.
+notify_owner: false
+ai_generated: true
 ```
 
 ## Current status
