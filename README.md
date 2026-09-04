@@ -10,7 +10,9 @@ learns simple explainable baselines, generates daily or on-demand summaries,
 and can call any configured Home Assistant AI Task provider for interpretation.
 
 The integration is designed for any Home Assistant installation where raw
-history is plentiful but useful operational context is hard to see.
+history is plentiful but useful operational context is hard to see. Optional
+occupancy and reservation context also makes it useful for short-term rental
+operations without making rentals a requirement.
 
 > [!IMPORTANT]
 > House Observer is an analyst, not a safety controller. Keep deterministic Home
