@@ -19,19 +19,18 @@ is plentiful but useful operational context is hard to see.
 
 ## Current status
 
-Version `0.2.0-beta.7` is the current testing release. It adds persistent owner
-guidance for AI summaries. It also includes the progressive entity-discovery
-schedule, deterministic binary-sensor semantics, and privacy-safe reservation
-timing introduced in the previous betas. Learning-only mode is enabled by
-default, and proactive anomaly notifications remain suppressed until you
-explicitly disable it.
+House Observer includes persistent owner guidance for AI summaries, a
+progressive entity-discovery schedule, deterministic binary-sensor semantics,
+and privacy-safe reservation timing. Learning-only mode is enabled by default,
+and proactive anomaly notifications remain suppressed until you explicitly
+disable it.
 
 ## What it does
 
 - Watches only the effective entity set selected manually, recommended by
   discovery, or required by user overrides.
-- On the experimental branch, inventories eligible entities by Home Assistant
-  area and device, then asks the configured AI for a minimal useful set.
+- Inventories eligible entities by Home Assistant area and device, then asks
+  the configured AI for a minimal useful set.
 - Groups entities by operational meaning: activity, access, occupancy, spa,
   HVAC, Internet, energy, and reservation context.
 - Debounces high-frequency numeric telemetry before storing it.
@@ -86,13 +85,13 @@ good first candidates are:
 Keep **Learning-only mode** enabled for several representative stays. Review the
 stored summaries and baseline candidates before enabling proactive alerts.
 
-On the experimental discovery branch, leave the manual category fields blank
-and enable **Automatically discover important devices**. The first discovery
+To use automatic discovery, leave the manual category fields blank and enable
+**Automatically discover important devices**. The first discovery
 runs shortly after setup. Successful AI discovery is then repeated after about
 24 hours, on day 3, and on day 7 before settling into the configured interval,
 which is weekly by default. Failed AI discovery attempts retry daily.
 
-## Automatic device discovery (experimental branch)
+## Automatic device discovery
 
 Discovery is deliberately separate from anomaly detection and summary writing:
 
