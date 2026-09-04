@@ -9,8 +9,8 @@ operational memory for a property. It records meaningful state transitions,
 learns simple explainable baselines, generates daily or on-demand summaries,
 and can call any configured Home Assistant AI Task provider for interpretation.
 
-The integration is designed for homes and short-term rentals where raw history
-is plentiful but useful operational context is hard to see.
+The integration is designed for any Home Assistant installation where raw
+history is plentiful but useful operational context is hard to see.
 
 > [!IMPORTANT]
 > House Observer is an analyst, not a safety controller. Keep deterministic Home
@@ -32,7 +32,7 @@ disable it.
 - Inventories eligible entities by Home Assistant area and device, then asks
   the configured AI for a minimal useful set.
 - Groups entities by operational meaning: activity, access, occupancy, spa,
-  HVAC, Internet, energy, and reservation context.
+  HVAC, Internet, energy, and optional schedule context.
 - Debounces high-frequency numeric telemetry before storing it.
 - Retains a bounded local event history in Home Assistant `.storage`.
 - Learns per-entity numeric ranges, state frequency, and activity by hour.
@@ -45,13 +45,13 @@ disable it.
   entity, without tying the integration to one AI vendor.
 - Includes optional persistent owner guidance with every AI summary.
 - Falls back to a deterministic summary when AI Task is unavailable.
-- Stores reservation context without creating a permanent guest dossier.
+- Stores optional schedule context without creating a permanent personal profile.
 - Normalizes configured reservation start/end times locally, including exact
   day and minute offsets, before they reach the AI provider.
 - Converts binary sensor states into device-class-aware meanings before AI
   analysis, such as `problem: off` becoming `normal` rather than “powered off.”
 - Exposes status, recent event/anomaly counts, learned baseline count, active
-  stay, and latest summary sensors.
+  optional occupancy context, and latest summary sensors.
 
 ## Installation with HACS
 
@@ -68,8 +68,8 @@ repository:
 
 ## Recommended first configuration
 
-Start with a deliberate subset of reliable entities. For a rental property,
-good first candidates are:
+Start with a deliberate subset of reliable entities. Good first candidates
+for many Home Assistant installations are:
 
 | Category | Useful entity types |
 | --- | --- |
@@ -80,10 +80,11 @@ good first candidates are:
 | HVAC | Climate entities, room temperature, HVAC action, mini-split power |
 | Network | WAN availability, Starlink latency/outages, router availability |
 | Energy | Whole-home power and important Emporia circuits |
-| Reservation | Calendar or helpers describing the current stay |
+| Schedule context | Optional calendar or helpers describing a relevant period |
 
-Keep **Learning-only mode** enabled for several representative stays. Review the
-stored summaries and baseline candidates before enabling proactive alerts.
+Keep **Learning-only mode** enabled through several representative days or
+operating cycles. Review the stored summaries and baseline candidates before
+enabling proactive alerts.
 
 To use automatic discovery, leave the manual category fields blank and enable
 **Automatically discover important devices**. The first discovery
@@ -162,7 +163,7 @@ One House Observer device is created per configured property with these sensors:
 - **Anomalies in 24 hours**: number of numeric baseline deviation candidates.
 - **Learned baselines**: entities with enough observations to compare.
 - **Last summary**: timestamp with structured summary attributes.
-- **Active stay**: current manually supplied reservation context.
+- **Active stay**: optional manually supplied occupancy or schedule context.
 
 ## Actions
 
@@ -192,8 +193,8 @@ IDs, a conservative local fallback is used.
 
 ### Record a property note
 
-Use this after maintenance, an equipment change, or a guest-reported issue so
-future summaries have relevant context.
+Use this after maintenance, an equipment change, or any reported issue so future
+summaries have relevant context.
 
 ```yaml
 action: house_observer.record_note
@@ -202,20 +203,20 @@ data:
   note: Replaced the spa filter and changed filtration settings.
 ```
 
-### Set current-stay context
+### Set optional occupancy context
 
 ```yaml
 action: house_observer.set_stay_context
 data:
   reservation_id: ABC123
-  label: Weekend stay
+  label: Scheduled occupancy
   guest_count: 8
   pet_count: 2
   check_in: "2026-09-04 16:00:00"
   check_out: "2026-09-07 10:00:00"
 ```
 
-Clear it after checkout:
+Clear it when the context no longer applies:
 
 ```yaml
 action: house_observer.set_stay_context
@@ -259,7 +260,7 @@ notification policy.
 - Aggregate patterns survive event pruning so the property can learn over time.
 - AI prompts explicitly prohibit identities, motives, protected
   characteristics, or unsupported occupancy conclusions.
-- Candidate memories describe the property, not individual guests.
+- Candidate memories describe the property, not individuals.
 
 Selected telemetry is sent to the configured AI Task provider whenever an AI
 summary is generated. The provider's own privacy and retention terms apply.
