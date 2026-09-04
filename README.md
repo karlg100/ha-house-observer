@@ -19,6 +19,28 @@ operations without making rentals a requirement.
 > Assistant automations for smoke, carbon monoxide, freezing, leaks, security,
 > equipment limits, and other time-critical conditions.
 
+## Example output
+
+A representative summary returned by `house_observer.generate_summary`:
+
+```yaml
+summary: >-
+  The home was mostly quiet overnight. Upstairs temperature remained 4.8 °F
+  above its learned range for 47 minutes while HVAC action stayed idle.
+severity: watch
+confidence: 0.91
+observations: |-
+  Exterior doors remained closed overnight.
+  Whole-home power stayed within its learned range.
+anomalies: |-
+  Upstairs temperature exceeded its learned range from 6:12 AM to 6:59 AM.
+maintenance_notes: |-
+  Check the upstairs thermostat schedule if this pattern repeats.
+candidate_memories: |-
+  Upstairs temperature normally begins rising after 7:00 AM.
+notify_owner: true
+```
+
 ## Current status
 
 House Observer includes persistent owner guidance for AI summaries, a
