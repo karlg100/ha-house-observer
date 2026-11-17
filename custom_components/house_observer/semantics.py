@@ -37,15 +37,11 @@ _BINARY_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
-def semantic_state(
-    entity_id: str, state: Any, attributes: Mapping[str, Any]
-) -> str:
+def semantic_state(entity_id: str, state: Any, attributes: Mapping[str, Any]) -> str:
     """Translate binary sensor on/off into device-class-specific meaning."""
     raw_state = str(state)
     if not entity_id.startswith("binary_sensor.") or raw_state not in {"on", "off"}:
         return raw_state
     device_class = str(attributes.get("device_class") or "")
-    off_label, on_label = _BINARY_LABELS.get(
-        device_class, ("inactive", "active")
-    )
+    off_label, on_label = _BINARY_LABELS.get(device_class, ("inactive", "active"))
     return on_label if raw_state == "on" else off_label
