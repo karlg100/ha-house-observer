@@ -405,7 +405,29 @@ def render_house_log(
     *,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
 ) -> HouseLog:
-    """Render the log within a character budget."""
+    """Render the log within a character budget.
+
+    Every time is shown in the time zone of ``start``. Recorder rows arrive in
+    UTC, so they are converted here rather than trusting each caller.
+    """
+    zone = start.tzinfo
+    if zone is not None:
+        end = end.astimezone(zone)
+        series_list = [
+            Series(
+                entity_id=series.entity_id,
+                name=series.name,
+                category=series.category,
+                kind=series.kind,
+                points=[
+                    Point(point.when.astimezone(zone), point.state, point.attributes)
+                    for point in series.points
+                ],
+                unit=series.unit,
+                spread=series.spread,
+            )
+            for series in series_list
+        ]
     raw_points = sum(len(series.points) for series in series_list)
     include_timeline = True
     scale = 1.0

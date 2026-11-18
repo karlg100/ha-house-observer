@@ -180,3 +180,28 @@ def test_events_list_times(houselog_module) -> None:
     )
     text = houselog_module.render_house_log([motion], START, END).text
     assert "Driveway motion: 2 events at Tue 01:00, 13:15" in text
+
+
+def test_utc_points_are_shown_in_local_time(houselog_module) -> None:
+    from datetime import timezone
+
+    eastern = timezone(timedelta(hours=-5))
+    start = datetime(2026, 11, 17, 0, 0, tzinfo=eastern)
+    # 21:30 UTC is 16:30 in UTC-5, inside a 4-8 PM peak window.
+    door = series(
+        houselog_module,
+        "binary_sensor.door",
+        "Door",
+        "access",
+        "discrete",
+        [
+            (start, "closed", None),
+            (datetime(2026, 11, 17, 21, 30, tzinfo=UTC), "open", None),
+            (datetime(2026, 11, 17, 21, 45, tzinfo=UTC), "closed", None),
+        ],
+    )
+    text = houselog_module.render_house_log(
+        [door], start, start + timedelta(hours=24)
+    ).text
+    assert "open 16:30-16:45 (15m)" in text
+    assert "21:30" not in text

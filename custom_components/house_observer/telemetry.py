@@ -9,6 +9,7 @@ from functools import partial
 from typing import Any
 
 from homeassistant.core import HomeAssistant, State
+from homeassistant.util import dt as dt_util
 
 from .houselog import UNAVAILABLE, Point, Series
 from .models import ObservationEvent
@@ -81,7 +82,11 @@ async def async_recorder_points(
                     else {}
                 )
                 points.append(
-                    Point(max(state.last_updated, start), state.state, attributes)
+                    Point(
+                        dt_util.as_local(max(state.last_updated, start)),
+                        state.state,
+                        attributes,
+                    )
                 )
             output[entity_id] = points
     return output

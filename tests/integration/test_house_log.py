@@ -81,6 +81,11 @@ async def test_summary_reads_full_house_log_from_recorder(
     assert "2.60k..2.65k" in prompt
     assert '"recent_events"' not in prompt
     assert summary.analysis_path == "ai_task"
+    # Times are local: the door's last close is shown at the local clock time.
+    from homeassistant.util import dt as dt_util
+
+    last_close = dt_util.as_local(hass.states.get(DOOR).last_changed)
+    assert f"closed {last_close:%H:%M}-now" in door_line
 
 
 async def test_llm_tools_read_monitored_entities_only(
