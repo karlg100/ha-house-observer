@@ -177,6 +177,21 @@ Porch door open while Main Floor heating: Tue 17:40-17:52 (12m)
 Without the recorder, the log is built from House Observer's own retained
 observations.
 
+## Reply length and the AI output limit
+
+AI providers cap how long one reply can be. House Observer reads that cap from
+the AI Task (or analysis agent) settings, including any thinking budget, and
+sizes the summary to fit: about 360 words and 7 lines per list at the
+Anthropic and OpenAI recommended 3,000 tokens, up to 500 words and 15 lines at
+8,000 or more. If a reply is still cut off, it retries once with a much
+shorter reply.
+
+The model always reads the full house log; only how much it can write back is
+limited. Whenever a summary had to be shortened, a Repairs warning explains
+how to raise the limit, and it clears after the next full-length summary. The
+Status sensor shows the detected limit as `ai_output_limit_tokens`, and the
+Last summary sensor shows `reply_compacted`.
+
 ## Letting an agent dig deeper
 
 House Observer registers a Home Assistant LLM API named **House Observer**

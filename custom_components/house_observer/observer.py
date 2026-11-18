@@ -87,6 +87,7 @@ from .knowledge import (
     prune_knowledge,
     recurring_candidate_memories,
 )
+from .limits import FULL_REPLY_TOKENS, OutputLimit, detect_output_limit, reply_budget
 from .models import KnowledgeItem, ObservationEvent, ObserverSummary
 from .notify import async_send, should_notify
 from .occupancy import (
@@ -97,7 +98,11 @@ from .occupancy import (
 )
 from .patterns import PatternEngine, numeric_value
 from .prompts import SUMMARY_STRUCTURE, build_summary_prompt, parse_json_reply
-from .repairs import async_clear_failure, async_report_failure
+from .repairs import (
+    async_clear_failure,
+    async_report_failure,
+    async_report_output_limit,
+)
 from .reservations import (
     RESERVATION_CHANGED,
     is_reservation_state,
@@ -178,6 +183,7 @@ class HouseObserver:
         self.last_summary_error_at: str | None = None
         self.last_agent_error: str | None = None
         self.last_house_log: dict[str, Any] | None = None
+        self.output_limit: int | None = None
         self.discovery = DiscoveryManager(self)
         self._tracked: list[str] = []
         self._throttle = NumericThrottle(DEFAULT_EVENT_WINDOW_SECONDS)
@@ -645,10 +651,25 @@ class HouseObserver:
             "house_log": house_log.text if house_log else None,
         }
 
+        compacted = False
+        limit: OutputLimit | None = None
+
+        def sized(target: str | None) -> dict[str, Any]:
+            nonlocal compacted, limit
+            limit = detect_output_limit(self.hass, target)
+            budget = reply_budget(limit)
+            compacted = limit.compacted
+            return {
+                "summary_words": budget.summary_words,
+                "list_lines": budget.list_lines,
+                "memory_lines": budget.memory_lines,
+            }
+
         if agent_id := self.options.get(CONF_ANALYSIS_AGENT):
             try:
                 result = await self._async_agent_summary(
-                    agent_id, build_summary_prompt(**prompt_args, agent=True)
+                    agent_id,
+                    build_summary_prompt(**prompt_args, **sized(agent_id), agent=True),
                 )
                 path = "agent"
                 self.last_agent_error = None
@@ -663,18 +684,20 @@ class HouseObserver:
                 )
 
         if result is None:
+            limits = sized(self.options.get(CONF_AI_TASK_ENTITY))
             for compact in (False, True):
                 try:
                     result = await async_generate_data(
                         self.hass,
                         task_name=f"{self.property_name} house observer summary",
                         instructions=build_summary_prompt(
-                            **prompt_args, compact=compact
+                            **prompt_args, **limits, compact=compact
                         ),
                         structure=SUMMARY_STRUCTURE,
                         entity_id=self.options.get(CONF_AI_TASK_ENTITY),
                     )
                     path = "ai_task_compact" if compact else "ai_task"
+                    compacted = compacted or compact
                     error = None
                     break
                 except AITaskUnavailable as err:
@@ -700,6 +723,8 @@ class HouseObserver:
         self._record_summary_outcome(error)
         if result is None:
             result = self._fallback_summary(context, error or "unknown error")
+        else:
+            self._record_output_limit(limit, compacted)
 
         severity = str(result.get("severity", "normal")).strip().lower()
         if severity not in SEVERITIES:
@@ -709,7 +734,7 @@ class HouseObserver:
             reason=reason,
             period_hours=period_hours,
             summary=_limited_text(
-                result.get("summary", "No summary was generated."), 2000
+                result.get("summary", "No summary was generated."), 4000
             ),
             severity=severity,
             confidence=_as_confidence(result.get("confidence")),
@@ -722,6 +747,7 @@ class HouseObserver:
             mode=self.mode,
             occupancy=occupancy,
             analysis_path=path,
+            reply_compacted=compacted,
         )
         self.summaries.append(summary)
         self.summaries = self.summaries[-DEFAULT_MAX_SUMMARIES:]
@@ -816,6 +842,23 @@ class HouseObserver:
             return None
         stats = record["numeric"]
         return stats.standard_deviation if stats.weight >= 10 else None
+
+    def _record_output_limit(self, limit: OutputLimit | None, compacted: bool) -> None:
+        """Warn in Repairs while replies are shortened to fit the limit."""
+        self.output_limit = limit.max_tokens if limit else None
+        if compacted:
+            async_report_output_limit(
+                self.hass,
+                entry_id=self.entry.entry_id,
+                property_name=self.property_name,
+                entity_id=limit.entity_id if limit else None,
+                max_tokens=limit.max_tokens if limit else None,
+                recommended=FULL_REPLY_TOKENS,
+            )
+        else:
+            async_clear_failure(
+                self.hass, kind="output_limit_low", entry_id=self.entry.entry_id
+            )
 
     def _record_summary_outcome(self, error: str | None) -> None:
         entry_id = self.entry.entry_id

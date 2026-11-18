@@ -219,6 +219,10 @@
     "summary_failed": {
       "title": "House Observer summaries are failing for {property}",
       "description": "AI summaries for {property} have failed {failures} times in a row, so only deterministic summaries are being produced.\n\nLast error: {error}\n\nCheck that an AI Task provider is configured and working. This message clears after the next successful summary."
+    },
+    "output_limit_low": {
+      "title": "House Observer summaries for {property} are being shortened",
+      "description": "{entity} allows {limit} output tokens per reply, so House Observer is shortening its summaries for {property} to fit. The model still reads every recorded change, but it can report less of what it finds.\n\nTo get full summaries, raise the maximum tokens to at least {recommended}. For Anthropic, OpenAI, or Google: Settings > Devices & services > the integration > the AI Task entry > Reconfigure, turn off Recommended model settings, and set Maximum tokens. This warning clears after the next summary that does not need shortening."
     }
   },
   "services": {
