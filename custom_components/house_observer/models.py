@@ -91,6 +91,7 @@ class ObserverSummary:
     occupancy: str = ""
     analysis_path: str = ""
     reply_compacted: bool = False
+    occupancy_estimate: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable representation."""

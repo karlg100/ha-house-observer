@@ -52,6 +52,13 @@ SUMMARY_STRUCTURE: dict[str, Any] = {
         ),
         "selector": {"text": {"multiline": True}},
     },
+    "occupancy_estimate": {
+        "description": (
+            "Rental only: estimated people present as a range with the "
+            "evidence, if it can be determined; blank otherwise."
+        ),
+        "selector": {"text": {}},
+    },
     "notify_owner": {
         "description": "True only when timely owner attention is justified.",
         "required": True,
@@ -76,8 +83,9 @@ DISCOVERY_STRUCTURE: dict[str, Any] = {
 
 _COMMON_RULES = (
     "Analyze only the supplied Home Assistant telemetry and property context. "
-    "Do not invent events, identities, occupant counts, motives, diagnoses, or "
-    "personal characteristics. Describe people only through property and "
+    "Do not invent events, identities, motives, diagnoses, or personal "
+    "characteristics, and give occupant numbers only as the evidence-based "
+    "rental estimate described below. Describe people only through property and "
     "equipment evidence, and phrase uncertain occupancy conclusions as apparent "
     "activity. Routine behavior is normal, not suspicious. A numeric deviation "
     "is a clue, not proof of a fault. A large z-score alone is never enough for "
@@ -130,8 +138,14 @@ _FOCUS: dict[tuple[str, str], str] = {
         "activity during quiet hours well above learned behavior; water use or "
         "power draw well beyond what comparable stays show; smoke, leak, "
         "tamper, or freeze signals; and devices or the network taken offline. "
-        "If activity looks higher than typical for the booked guest_count, say "
-        "so with the evidence, but never estimate a head count. Ordinary "
+        "When the evidence supports it, estimate how many people appear to be "
+        "present as a cautious range (for example 4-6) in occupancy_estimate, "
+        "using only property evidence: areas occupied at the same time, "
+        "simultaneous activity in separate parts of the house, overlapping "
+        "showers and water draws, hot tub use, and garage or driveway activity. "
+        "Note the evidence and your confidence, and the booked guest_count if "
+        "one is supplied. Leave occupancy_estimate blank when the evidence is "
+        "too thin. Never name, identify, or describe individuals. Ordinary "
         "vacation use, such as late evenings, cooking, or frequent hot tub "
         "use, is not misuse."
     ),
@@ -201,7 +215,8 @@ _AGENT_RULES = (
     "JSON object, with no other text, using exactly these keys: summary "
     "(string), severity (normal, note, watch, or action), confidence (0 to "
     "1), observations, anomalies, maintenance_notes, candidate_memories "
-    "(strings, one item per line), and notify_owner (boolean)."
+    "(strings, one item per line), occupancy_estimate (string, rentals "
+    "only), and notify_owner (boolean)."
 )
 
 
