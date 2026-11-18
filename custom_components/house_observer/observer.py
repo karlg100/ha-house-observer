@@ -138,6 +138,21 @@ def _as_confidence(value: Any) -> float:
         return 0.0
 
 
+def _output_limited(error: str) -> bool:
+    """Return whether a provider error means the reply ran out of tokens."""
+    text = error.lower()
+    return any(
+        marker in text
+        for marker in (
+            "token limit",
+            "max_tokens",
+            "max tokens",
+            "output limit",
+            "length limit",
+        )
+    )
+
+
 def _limited_text(value: Any, limit: int = 4000) -> str:
     """Bound model and owner text stored in entity attributes."""
     text = str(value or "").strip()
@@ -162,6 +177,7 @@ class HouseObserver:
         self.last_summary_error: str | None = None
         self.last_summary_error_at: str | None = None
         self.last_agent_error: str | None = None
+        self.last_house_log: dict[str, Any] | None = None
         self.discovery = DiscoveryManager(self)
         self._tracked: list[str] = []
         self._throttle = NumericThrottle(DEFAULT_EVENT_WINDOW_SECONDS)
@@ -647,25 +663,39 @@ class HouseObserver:
                 )
 
         if result is None:
-            try:
-                result = await async_generate_data(
-                    self.hass,
-                    task_name=f"{self.property_name} house observer summary",
-                    instructions=build_summary_prompt(**prompt_args),
-                    structure=SUMMARY_STRUCTURE,
-                    entity_id=self.options.get(CONF_AI_TASK_ENTITY),
-                )
-                path = "ai_task"
-            except AITaskUnavailable as err:
-                error = str(err)
-            except Exception as err:  # noqa: BLE001 - any failure must be recorded
-                error = describe_error(err)
-                _LOGGER.warning(
-                    "House Observer summary for %s failed: %s",
-                    self.property_name,
-                    error,
-                    exc_info=_LOGGER.isEnabledFor(logging.DEBUG),
-                )
+            for compact in (False, True):
+                try:
+                    result = await async_generate_data(
+                        self.hass,
+                        task_name=f"{self.property_name} house observer summary",
+                        instructions=build_summary_prompt(
+                            **prompt_args, compact=compact
+                        ),
+                        structure=SUMMARY_STRUCTURE,
+                        entity_id=self.options.get(CONF_AI_TASK_ENTITY),
+                    )
+                    path = "ai_task_compact" if compact else "ai_task"
+                    error = None
+                    break
+                except AITaskUnavailable as err:
+                    error = str(err)
+                    break
+                except Exception as err:  # noqa: BLE001 - any failure must be recorded
+                    error = describe_error(err)
+                    if not compact and _output_limited(error):
+                        _LOGGER.info(
+                            "House Observer summary for %s hit the output limit; "
+                            "retrying with a shorter reply",
+                            self.property_name,
+                        )
+                        continue
+                    _LOGGER.warning(
+                        "House Observer summary for %s failed: %s",
+                        self.property_name,
+                        error,
+                        exc_info=_LOGGER.isEnabledFor(logging.DEBUG),
+                    )
+                    break
 
         self._record_summary_outcome(error)
         if result is None:
@@ -766,7 +796,19 @@ class HouseObserver:
         )
         if not series:
             return None
-        return render_house_log(series, start, end, budget_chars=budget_chars)
+        log = render_house_log(series, start, end, budget_chars=budget_chars)
+        self.last_house_log = {
+            "built_at": dt_util.now().isoformat(),
+            "hours": round((end - start).total_seconds() / 3600, 1),
+            "characters": len(log.text),
+            "entities": log.entity_count,
+            "raw_state_changes": log.raw_points,
+            "timeline_included": log.timeline_included,
+            "tolerance_multiplier": log.tolerance_multiplier,
+            "truncated": log.truncated,
+            "source": "recorder" if recorder_available(self.hass) else "stored_events",
+        }
+        return log
 
     def _spread_for(self, entity_id: str) -> float | None:
         record = self.patterns.entities.get(entity_id)
@@ -978,6 +1020,7 @@ class HouseObserver:
             "learned_entity_count": self.patterns.learned_entity_count,
             "last_summary": self.summaries[-1].as_dict() if self.summaries else None,
             "has_stay_context": bool(self.stay_context),
+            "last_house_log": self.last_house_log,
             "automatic_discovery": bool(self.options[CONF_AUTO_DISCOVERY]),
             "discovery": {
                 key: value

@@ -168,3 +168,25 @@ async def test_analysis_agent_failure_falls_back_to_ai_task(
     status = hass.states.get("sensor.test_house_status")
     assert status.state != "error"
     assert "summary JSON" in status.attributes["analysis_agent_error"]
+
+
+async def test_output_limit_retries_with_a_shorter_reply(
+    hass: HomeAssistant, fake_ai: Any
+) -> None:
+    await _record_activity(hass)
+    entry = await _setup(hass)
+    fake_ai.error_once = HomeAssistantError(
+        "Claude reached the output token limit before completing the response"
+    )
+    summary = await entry.runtime_data.async_generate_summary()
+    assert len(fake_ai.calls) == 2
+    assert (
+        "Keep the whole reply under about 900 words" in fake_ai.calls[0]["instructions"]
+    )
+    assert "cut off by the output length limit" in fake_ai.last_instructions
+    assert summary.analysis_path == "ai_task_compact"
+    assert summary.ai_generated
+    status = hass.states.get("sensor.test_house_status")
+    assert status.state == "learning"
+    assert status.attributes["house_log"]["source"] == "recorder"
+    assert status.attributes["house_log"]["entities"] == 2
