@@ -383,3 +383,77 @@ def test_prompts_follow_mode_and_occupancy(prompts_module) -> None:
     unknown = prompt("home", "unknown")
     assert "If occupied:" in unknown
     assert "If vacant:" in unknown
+
+
+# ------------------------------------------------------------ registry churn
+
+
+@pytest.mark.parametrize(
+    ("event_type", "data", "expected"),
+    [
+        (
+            "entity_registry_updated",
+            {"action": "create", "entity_id": "sensor.new_water_meter"},
+            (True, True),
+        ),
+        (
+            "entity_registry_updated",
+            {"action": "remove", "entity_id": "binary_sensor.old_door"},
+            (True, True),
+        ),
+        # Network integrations create trackers for every client: ignore them.
+        (
+            "entity_registry_updated",
+            {"action": "create", "entity_id": "device_tracker.guest_phone"},
+            (False, False),
+        ),
+        (
+            "entity_registry_updated",
+            {
+                "action": "update",
+                "entity_id": "sensor.power",
+                "changes": {"labels": set()},
+            },
+            (True, False),
+        ),
+        (
+            "entity_registry_updated",
+            {
+                "action": "update",
+                "entity_id": "sensor.power",
+                "changes": {"capabilities": {}, "modified_at": "x"},
+            },
+            (False, False),
+        ),
+        (
+            "entity_registry_updated",
+            {
+                "action": "update",
+                "entity_id": "sensor.new",
+                "old_entity_id": "sensor.old",
+                "changes": {"entity_id": "sensor.old"},
+            },
+            (True, True),
+        ),
+        (
+            "device_registry_updated",
+            {"action": "update", "device_id": "d", "changes": {"sw_version": "1"}},
+            (False, False),
+        ),
+        (
+            "device_registry_updated",
+            {"action": "update", "device_id": "d", "changes": {"area_id": None}},
+            (True, False),
+        ),
+        ("label_registry_updated", {"action": "create"}, (True, False)),
+    ],
+)
+def test_registry_change_effect(discovery_module, event_type, data, expected) -> None:
+    assert discovery_module.registry_change_effect(event_type, data) == expected
+
+
+def test_registry_rediscovery_is_daily(discovery_module) -> None:
+    allowed = discovery_module.registry_rediscovery_allowed
+    assert allowed(None, NOW)
+    assert not allowed(NOW - timedelta(hours=5), NOW)
+    assert allowed(NOW - timedelta(hours=24), NOW)
