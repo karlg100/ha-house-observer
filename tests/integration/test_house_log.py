@@ -9,7 +9,9 @@ import pytest
 from homeassistant.components.conversation import ConversationResult
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import intent, llm
+from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
@@ -168,3 +170,95 @@ async def test_analysis_agent_failure_falls_back_to_ai_task(
     status = hass.states.get("sensor.test_house_status")
     assert status.state != "error"
     assert "summary JSON" in status.attributes["analysis_agent_error"]
+
+
+async def test_output_limit_retries_with_a_shorter_reply(
+    hass: HomeAssistant, fake_ai: Any
+) -> None:
+    await _record_activity(hass)
+    entry = await _setup(hass)
+    fake_ai.error_once = HomeAssistantError(
+        "Claude reached the output token limit before completing the response"
+    )
+    summary = await entry.runtime_data.async_generate_summary()
+    assert len(fake_ai.calls) == 2
+    assert "Reply length must fit" in fake_ai.calls[0]["instructions"]
+    assert "cut off by the output length limit" in fake_ai.last_instructions
+    assert summary.analysis_path == "ai_task_compact"
+    assert summary.ai_generated
+    status = hass.states.get("sensor.test_house_status")
+    assert status.state == "learning"
+    assert status.attributes["house_log"]["source"] == "recorder"
+    assert status.attributes["house_log"]["entities"] == 2
+    # A cut-off reply means the summary was shortened: warn in Repairs.
+    issue_id = f"output_limit_low_{entry.entry_id}"
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+    assert hass.states.get("sensor.test_house_last_summary").attributes[
+        "reply_compacted"
+    ]
+
+
+def _anthropic_ai_task(hass: HomeAssistant, data: dict[str, Any]) -> MockConfigEntry:
+    provider = MockConfigEntry(
+        domain="anthropic",
+        subentries_data=[
+            {
+                "data": data,
+                "subentry_type": "ai_task_data",
+                "title": "Claude AI Task",
+                "subentry_id": "task",
+                "unique_id": None,
+            }
+        ],
+    )
+    provider.add_to_hass(hass)
+    er.async_get(hass).async_get_or_create(
+        "ai_task",
+        "anthropic",
+        "claude-task",
+        suggested_object_id="claude",
+        config_entry=provider,
+        config_subentry_id="task",
+    )
+    return provider
+
+
+async def test_reply_is_sized_to_the_detected_output_limit(
+    hass: HomeAssistant, fake_ai: Any
+) -> None:
+    provider = _anthropic_ai_task(hass, {"recommended": True})
+    entry = await _setup(hass, ai_task_entity="ai_task.claude")
+    observer = entry.runtime_data
+    issue_id = f"output_limit_low_{entry.entry_id}"
+
+    summary = await observer.async_generate_summary()
+    assert "at most 360 words" in fake_ai.last_instructions
+    assert summary.reply_compacted
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.translation_placeholders["limit"] == "3000"
+    assert issue.translation_placeholders["entity"] == "ai_task.claude"
+
+    hass.config_entries.async_update_subentry(
+        provider,
+        provider.subentries["task"],
+        data={"recommended": False, "max_tokens": 9000},
+    )
+    summary = await observer.async_generate_summary()
+    assert "at most 500 words" in fake_ai.last_instructions
+    assert not summary.reply_compacted
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+    status = hass.states.get("sensor.test_house_status")
+    assert status.attributes["ai_output_limit_tokens"] == 9000
+
+
+async def test_thinking_budget_counts_against_the_limit(
+    hass: HomeAssistant, fake_ai: Any
+) -> None:
+    _anthropic_ai_task(
+        hass, {"recommended": False, "max_tokens": 10000, "thinking_budget": 4000}
+    )
+    entry = await _setup(hass, ai_task_entity="ai_task.claude")
+    summary = await entry.runtime_data.async_generate_summary()
+    assert summary.reply_compacted
+    assert entry.runtime_data.output_limit == 6000

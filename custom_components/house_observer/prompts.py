@@ -10,7 +10,9 @@ from .const import CATEGORIES, MODE_RENTAL
 
 SUMMARY_STRUCTURE: dict[str, Any] = {
     "summary": {
-        "description": "A concise plain-language operational summary.",
+        "description": (
+            "A concise plain-language operational summary within the stated word limit."
+        ),
         "required": True,
         "selector": {"text": {"multiline": True}},
     },
@@ -33,7 +35,7 @@ SUMMARY_STRUCTURE: dict[str, Any] = {
         "selector": {"number": {}},
     },
     "observations": {
-        "description": "Important observations, one per line.",
+        "description": "Important observations, one short sentence per line.",
         "selector": {"text": {"multiline": True}},
     },
     "anomalies": {
@@ -172,6 +174,25 @@ def focus_for(mode: str, occupancy: str) -> str:
     )
 
 
+def length_rules(summary_words: int, list_lines: int, memory_lines: int) -> str:
+    """Reply limits sized to the provider's output limit."""
+    return (
+        "Reply length must fit the provider's output limit, so a reply that "
+        f"runs long is cut off and lost. The summary is at most {summary_words} "
+        "words; owner guidance may ask for less, never more. observations, "
+        f"anomalies, and maintenance_notes have at most {list_lines} lines each "
+        f"and candidate_memories at most {memory_lines}; each line is one "
+        "sentence under 30 words. Put the most important items first and merge "
+        "related ones; the owner can ask for raw detail later."
+    )
+
+
+_COMPACT_RULES = (
+    "Your previous reply was cut off by the output length limit. Be much "
+    "briefer this time: summary under 150 words and at most 4 short lines in "
+    "each list."
+)
+
 _AGENT_RULES = (
     "You may call the house_observer tools to read more detail, such as raw "
     "readings for an entity and time range, when the house log is not "
@@ -193,6 +214,10 @@ def build_summary_prompt(
     context: dict[str, Any],
     house_log: str | None = None,
     agent: bool = False,
+    compact: bool = False,
+    summary_words: int = 300,
+    list_lines: int = 8,
+    memory_lines: int = 4,
 ) -> str:
     """Build the operational-analysis prompt."""
     role = (
@@ -204,6 +229,11 @@ def build_summary_prompt(
     if mode == MODE_RENTAL:
         parts.append(_RENTAL_RULES)
     parts.append(f"Current focus ({occupancy}): {focus_for(mode, occupancy)}")
+    parts.append(
+        _COMPACT_RULES
+        if compact
+        else length_rules(summary_words, list_lines, memory_lines)
+    )
     if agent:
         parts.append(_AGENT_RULES)
     parts.append(

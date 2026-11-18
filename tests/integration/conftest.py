@@ -29,11 +29,15 @@ class FakeAITask:
         }
         self.recommendations: str = ""
         self.error: Exception | None = None
+        self.error_once: Exception | None = None
 
     async def handle(self, call: ServiceCall) -> dict[str, Any]:
         self.calls.append(dict(call.data))
         if self.error is not None:
             raise self.error
+        if self.error_once is not None:
+            error, self.error_once = self.error_once, None
+            raise error
         if "recommendations" in call.data["structure"]:
             return {
                 "data": {"recommendations": self.recommendations, "confidence": 0.8}
