@@ -94,6 +94,7 @@ class ObserverStatusSensor(ObserverSensorBase):
             "last_error": error.get("message"),
             "last_error_source": error.get("source"),
             "last_error_at": error.get("at"),
+            "analysis_agent_error": self.manager.last_agent_error,
             "tracked_entities": len(self.manager.tracked_entities),
             "retained_events": len(self.manager.events),
             "retained_summaries": len(self.manager.summaries),
@@ -281,6 +282,7 @@ class ObserverSummarySensor(ObserverSensorBase):
             "mode": summary.mode,
             "occupancy": summary.occupancy,
             "ai_generated": summary.ai_generated,
+            "analysis_path": summary.analysis_path,
         }
 
 

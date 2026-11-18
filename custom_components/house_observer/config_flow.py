@@ -31,6 +31,7 @@ from .const import (
     CONF_AI_TASK_ENTITY,
     CONF_ALWAYS_MONITOR_DEVICES,
     CONF_ALWAYS_MONITOR_ENTITIES,
+    CONF_ANALYSIS_AGENT,
     CONF_AUTO_DISCOVERY,
     CONF_DISCOVERY_INTERVAL_HOURS,
     CONF_LEARNING_ONLY,
@@ -127,6 +128,9 @@ def analysis_schema(*, include_mode: bool) -> vol.Schema:
         {
             vol.Optional(CONF_AI_TASK_ENTITY): EntitySelector(
                 EntitySelectorConfig(domain="ai_task", multiple=False)
+            ),
+            vol.Optional(CONF_ANALYSIS_AGENT): EntitySelector(
+                EntitySelectorConfig(domain="conversation", multiple=False)
             ),
             vol.Optional(
                 CONF_OBSERVER_GUIDANCE, default=DEFAULT_OBSERVER_GUIDANCE

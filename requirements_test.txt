@@ -1,0 +1,7 @@
+# Test dependencies, pinned together. The conversation requirements must match
+# the Home Assistant version that pytest-homeassistant-custom-component pulls in
+# (see homeassistant/components/conversation/manifest.json).
+pytest-homeassistant-custom-component==0.13.316
+hassil==3.5.0
+home-assistant-intents==2026.1.28
+ruff==0.17.5

@@ -75,9 +75,14 @@ ai_generated: true
   cover has been open for 4 hours" is visible, not inferred.
 - Learns explainable numeric baselines per part of the day (night, morning,
   afternoon, evening). Older readings fade over about a month.
-- Feeds every numeric reading to the baselines but stores at most one event per
-  entity per five minutes, with the window's min, max, and mean attached so
-  short spikes are not lost.
+- Gives the model a compact **house log** of the whole lookback window instead
+  of raw rows: every door, lock, appliance, and occupancy change as intervals
+  with durations, numeric sensors as change-point segments, thermostat mode,
+  action, and setpoint changes, open-door-while-heating overlaps, and a
+  timeline. A busy day of about 8,000 recorded changes fits in roughly 5,000
+  tokens.
+- Registers read-only **House Observer tools** for conversation agents, so an
+  agent can pull raw readings for any monitored entity and time range.
 - Keeps owner notes and confirmed patterns as **property knowledge** that every
   summary sees, and passes recent summaries forward for continuity.
 - Produces a daily summary at a configurable time and on-demand summaries with
@@ -149,6 +154,51 @@ unknown and to say which it assumed.
 House Observer does not include an AI model. Install a Home Assistant
 integration that supplies an AI Task entity, and select it under **Summaries**,
 or leave the field blank to use Home Assistant's preferred one.
+
+## The house log
+
+Before each summary, House Observer reads the recorder history of every
+monitored entity for the lookback window and renders it as text:
+
+```text
+Sliding Door: closed Mon 20:49-07:12 (10h23) · open 07:12-07:14 (2m) · closed …
+House Power (W): … 16:52-16:57 1.24k..1.36k · 18:22-18:26 2.09k..2.36k · …
+Main Floor [mode/action/setpoint]: heat/idle/69.5 … · heat/heating/69.5 17:30-18:30 (1h)
+Porch door open while Main Floor heating: Tue 17:40-17:52 (12m)
+```
+
+- Discrete states keep every change, including momentary ones.
+- A numeric segment ends when the value leaves the sensor's normal variation,
+  judged from its learned spread, so a 7 W boiler and a 2 kW house are each
+  read on their own scale and short spikes keep their own segment.
+- If a log ever exceeds its budget, the timeline is dropped first, then numeric
+  tolerance is widened. Discrete intervals are never dropped.
+
+Without the recorder, the log is built from House Observer's own retained
+observations.
+
+## Letting an agent dig deeper
+
+House Observer registers a Home Assistant LLM API named **House Observer**
+with four read-only tools: list monitored entities, get the house log for any
+range up to 7 days, get raw readings for one monitored entity, and get recent
+summaries and notes. Tools only read monitored entities.
+
+To use them:
+
+1. In your AI integration (for example Anthropic), add or edit a conversation
+   agent and select **House Observer** under its Home Assistant LLM API
+   setting. A dedicated agent without **Assist** keeps it from controlling
+   devices.
+2. In House Observer, choose that agent as the **Analysis agent** under
+   **Summaries and property type**.
+
+Summaries then run through the agent, which reads the house log and can call
+the tools for detail. If the agent fails or does not return the summary JSON,
+the AI Task entity is used instead, and the error is shown on the Status
+sensor as `analysis_agent_error`. The Last summary sensor's `analysis_path`
+shows which was used. The same tools also let you ask that agent things like
+"when was the garage open yesterday?"
 
 ## Persistent observer guidance
 
@@ -284,8 +334,8 @@ The upgrade is automatic:
 ## Development
 
 Pure-logic tests need only `pytest`. The integration tests in
-`tests/integration` run against a real Home Assistant instance and are skipped
-unless `pytest-homeassistant-custom-component` is installed.
+`tests/integration` run against a real Home Assistant instance with a recorder
+and are skipped unless the packages in `requirements_test.txt` are installed.
 
 ```bash
 python -m pytest

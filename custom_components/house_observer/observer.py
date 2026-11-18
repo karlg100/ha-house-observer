@@ -16,7 +16,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import Event, HomeAssistant, State, callback
+from homeassistant.core import Context, Event, HomeAssistant, State, callback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
@@ -25,11 +25,17 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
-from .ai import AITaskUnavailable, async_generate_data, describe_error
+from .ai import (
+    AITaskBadResponse,
+    AITaskUnavailable,
+    async_generate_data,
+    describe_error,
+)
 from .const import (
     CONF_AI_TASK_ENTITY,
     CONF_ALWAYS_MONITOR_DEVICES,
     CONF_ALWAYS_MONITOR_ENTITIES,
+    CONF_ANALYSIS_AGENT,
     CONF_AUTO_DISCOVERY,
     CONF_DISCOVERY_INTERVAL_HOURS,
     CONF_LEARNING_ONLY,
@@ -72,6 +78,7 @@ from .const import (
 from .discovery import default_category
 from .discovery_manager import DiscoveryManager
 from .guidance import normalize_guidance
+from .houselog import DEFAULT_BUDGET_CHARS, HouseLog, render_house_log
 from .ingest import NumericThrottle, minutes_since, safe_attributes
 from .knowledge import (
     knowledge_context,
@@ -89,7 +96,7 @@ from .occupancy import (
     stay_reservation,
 )
 from .patterns import PatternEngine, numeric_value
-from .prompts import SUMMARY_STRUCTURE, build_summary_prompt
+from .prompts import SUMMARY_STRUCTURE, build_summary_prompt, parse_json_reply
 from .repairs import async_clear_failure, async_report_failure
 from .reservations import (
     RESERVATION_CHANGED,
@@ -100,10 +107,17 @@ from .reservations import (
 from .selection import SelectionInputs, category_for, effective_entities
 from .semantics import semantic_state
 from .store import ObserverStore
+from .telemetry import (
+    async_recorder_points,
+    build_series,
+    recorder_available,
+    stored_event_points,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 MAX_PROMPT_EVENTS = 250
+MAX_PROMPT_ANOMALIES = 50
 MAX_PROMPT_STATES = 150
 MAX_PROMPT_BASELINES = 50
 OPEN_STATES = {"open", "opening", "unlocked", "unlocking", "jammed"}
@@ -147,6 +161,7 @@ class HouseObserver:
         self.summary_failures = 0
         self.last_summary_error: str | None = None
         self.last_summary_error_at: str | None = None
+        self.last_agent_error: str | None = None
         self.discovery = DiscoveryManager(self)
         self._tracked: list[str] = []
         self._throttle = NumericThrottle(DEFAULT_EVENT_WINDOW_SECONDS)
@@ -600,34 +615,57 @@ class HouseObserver:
     ) -> ObserverSummary:
         """Generate and store an operational summary."""
         period_hours = hours or int(self.options[CONF_LOOKBACK_HOURS])
-        context = self.build_context(period_hours)
+        context, house_log = await self.async_build_context(period_hours)
         occupancy = context["occupancy"]["state"]
         result: dict[str, Any] | None = None
         error: str | None = None
-        try:
-            result = await async_generate_data(
-                self.hass,
-                task_name=f"{self.property_name} house observer summary",
-                instructions=build_summary_prompt(
-                    mode=self.mode,
-                    occupancy=occupancy,
-                    guidance=self.observer_guidance,
-                    reason=reason,
-                    context=context,
-                ),
-                structure=SUMMARY_STRUCTURE,
-                entity_id=self.options.get(CONF_AI_TASK_ENTITY),
-            )
-        except AITaskUnavailable as err:
-            error = str(err)
-        except Exception as err:  # noqa: BLE001 - any failure must be recorded
-            error = describe_error(err)
-            _LOGGER.warning(
-                "House Observer summary for %s failed: %s",
-                self.property_name,
-                error,
-                exc_info=_LOGGER.isEnabledFor(logging.DEBUG),
-            )
+        path = "fallback"
+        prompt_args = {
+            "mode": self.mode,
+            "occupancy": occupancy,
+            "guidance": self.observer_guidance,
+            "reason": reason,
+            "context": context,
+            "house_log": house_log.text if house_log else None,
+        }
+
+        if agent_id := self.options.get(CONF_ANALYSIS_AGENT):
+            try:
+                result = await self._async_agent_summary(
+                    agent_id, build_summary_prompt(**prompt_args, agent=True)
+                )
+                path = "agent"
+                self.last_agent_error = None
+            except Exception as err:  # noqa: BLE001 - fall back to AI Task
+                self.last_agent_error = describe_error(err)
+                _LOGGER.warning(
+                    "House Observer analysis agent %s failed for %s; using AI "
+                    "Task instead: %s",
+                    agent_id,
+                    self.property_name,
+                    self.last_agent_error,
+                )
+
+        if result is None:
+            try:
+                result = await async_generate_data(
+                    self.hass,
+                    task_name=f"{self.property_name} house observer summary",
+                    instructions=build_summary_prompt(**prompt_args),
+                    structure=SUMMARY_STRUCTURE,
+                    entity_id=self.options.get(CONF_AI_TASK_ENTITY),
+                )
+                path = "ai_task"
+            except AITaskUnavailable as err:
+                error = str(err)
+            except Exception as err:  # noqa: BLE001 - any failure must be recorded
+                error = describe_error(err)
+                _LOGGER.warning(
+                    "House Observer summary for %s failed: %s",
+                    self.property_name,
+                    error,
+                    exc_info=_LOGGER.isEnabledFor(logging.DEBUG),
+                )
 
         self._record_summary_outcome(error)
         if result is None:
@@ -653,6 +691,7 @@ class HouseObserver:
             ai_generated=error is None,
             mode=self.mode,
             occupancy=occupancy,
+            analysis_path=path,
         )
         self.summaries.append(summary)
         self.summaries = self.summaries[-DEFAULT_MAX_SUMMARIES:]
@@ -674,6 +713,68 @@ class HouseObserver:
             )
         return summary
 
+    async def _async_agent_summary(self, agent_id: str, prompt: str) -> dict[str, Any]:
+        """Ask a tool-enabled conversation agent and parse its JSON reply."""
+        from homeassistant.components import conversation  # noqa: PLC0415
+        from homeassistant.helpers import intent  # noqa: PLC0415
+
+        result = await conversation.async_converse(
+            self.hass,
+            text=prompt,
+            conversation_id=None,
+            context=Context(),
+            agent_id=agent_id,
+        )
+        response = result.response
+        speech = str((response.speech.get("plain") or {}).get("speech", ""))
+        if response.response_type == intent.IntentResponseType.ERROR:
+            raise AITaskBadResponse(f"Agent returned an error: {speech[:200]}")
+        data = parse_json_reply(speech)
+        if data is None:
+            raise AITaskBadResponse("Agent reply did not contain the summary JSON")
+        return data
+
+    async def async_house_log(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        entity_ids: list[str] | None = None,
+        budget_chars: int = DEFAULT_BUDGET_CHARS,
+    ) -> HouseLog | None:
+        """Render the compact log for a time range."""
+        ids = list(entity_ids or self._tracked)
+        if not ids:
+            return None
+        raw = None
+        if recorder_available(self.hass):
+            try:
+                raw = await async_recorder_points(self.hass, ids, start, end)
+            except Exception as err:  # noqa: BLE001 - fall back to stored events
+                _LOGGER.warning(
+                    "House Observer could not read recorder history: %s",
+                    describe_error(err),
+                )
+        if raw is None:
+            raw = stored_event_points(self.events, set(ids), start)
+        series = build_series(
+            self.hass,
+            raw,
+            category_for=self.category_for,
+            spread_for=self._spread_for,
+            reservation_ids=self._reservation_entities(),
+        )
+        if not series:
+            return None
+        return render_house_log(series, start, end, budget_chars=budget_chars)
+
+    def _spread_for(self, entity_id: str) -> float | None:
+        record = self.patterns.entities.get(entity_id)
+        if record is None:
+            return None
+        stats = record["numeric"]
+        return stats.standard_deviation if stats.weight >= 10 else None
+
     def _record_summary_outcome(self, error: str | None) -> None:
         entry_id = self.entry.entry_id
         if error is None:
@@ -694,9 +795,12 @@ class HouseObserver:
             error=error,
         )
 
-    def build_context(self, hours: int) -> dict[str, Any]:
-        """Build the compact, privacy-safe context for the model."""
+    async def async_build_context(
+        self, hours: int
+    ) -> tuple[dict[str, Any], HouseLog | None]:
+        """Build the model context and the compact house log."""
         now = dt_util.now()
+        house_log = await self.async_house_log(now - timedelta(hours=hours), now)
         recent = self.events_since(hours)
         category_counts: dict[str, int] = {}
         anomaly_count = 0
@@ -725,7 +829,22 @@ class HouseObserver:
                 }
             )
 
-        event_payload = [event.as_dict() for event in recent[-MAX_PROMPT_EVENTS:]]
+        # With a house log the model reads every change there; raw events are
+        # only sent when no log could be built.
+        event_payload = (
+            []
+            if house_log is not None
+            else [event.as_dict() for event in recent[-MAX_PROMPT_EVENTS:]]
+        )
+        anomalies = [
+            {
+                "time": event.timestamp,
+                "entity": event.name,
+                **(event.anomaly or {}),
+            }
+            for event in recent
+            if event.anomaly
+        ][-MAX_PROMPT_ANOMALIES:]
         context: dict[str, Any] = {
             "property": self.property_name,
             "mode": self.mode,
@@ -740,7 +859,10 @@ class HouseObserver:
                 exclude={item.text for item in self.knowledge},
             ),
             "event_count": len(recent),
-            "omitted_older_events": max(0, len(recent) - len(event_payload)),
+            "omitted_older_events": (
+                0 if house_log is not None else max(0, len(recent) - len(event_payload))
+            ),
+            "baseline_deviations": anomalies,
             "category_counts": category_counts,
             "anomaly_count": anomaly_count,
             "open_or_unlocked": [
@@ -750,7 +872,7 @@ class HouseObserver:
             ],
             "current_states": current_states[:MAX_PROMPT_STATES],
             "omitted_current_states": max(0, len(current_states) - MAX_PROMPT_STATES),
-            "recent_events": event_payload,
+            **({"recent_events": event_payload} if event_payload else {}),
             "learned_baselines": self.patterns.baseline_context(
                 limit=MAX_PROMPT_BASELINES, entity_ids=set(self._tracked)
             ),
@@ -759,7 +881,14 @@ class HouseObserver:
             context["stay"] = stay
         if reservations:
             context["reservations"] = reservations
-        return context
+        if house_log is not None:
+            context["house_log_stats"] = {
+                "entities": house_log.entity_count,
+                "raw_state_changes": house_log.raw_points,
+                "timeline_included": house_log.timeline_included,
+                "truncated": house_log.truncated,
+            }
+        return context, house_log
 
     def _fallback_summary(self, context: dict[str, Any], error: str) -> dict[str, Any]:
         """Create a deterministic summary when AI analysis is unavailable."""
