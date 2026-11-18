@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Any
+
+from .const import CATEGORIES
 
 DISCOVERY_RETRY_HOURS = 24
 DISCOVERY_BOOTSTRAP_MILESTONES_HOURS = (24, 72, 168)
@@ -32,17 +35,9 @@ def next_discovery_due(
         return min(configured_due, milestone_due)
     return configured_due
 
-DISCOVERY_CATEGORIES = {
-    "access",
-    "activity",
-    "energy",
-    "hvac",
-    "network",
-    "occupancy",
-    "other",
-    "reservation",
-    "spa",
-}
+
+DISCOVERY_CATEGORIES = set(CATEGORIES)
+MAX_PER_AREA = 40
 
 PRIVATE_OR_UNHELPFUL_DOMAINS = {
     "ai_task",
@@ -107,12 +102,27 @@ _DEVICE_CLASS_SCORES = {
     "presence": 35,
     "problem": 40,
     "smoke": 40,
+    "sound": 30,
     "temperature": 35,
     "window": 30,
 }
 
 _KEYWORD_SCORES = {
+    "cover": 10,
+    "dishwasher": 20,
     "door": 20,
+    "dryer": 20,
+    "flow": 20,
+    "freezer": 25,
+    "fridge": 20,
+    "hot tub": 30,
+    "hot_tub": 30,
+    "noise": 20,
+    "refrigerator": 20,
+    "washer": 20,
+    "water heater": 25,
+    "water_heater": 25,
+    "window": 15,
     "entry": 15,
     "garage": 20,
     "heat": 15,
@@ -129,7 +139,7 @@ _KEYWORD_SCORES = {
     "starlink": 50,
     "temperature": 15,
     "thermostat": 25,
-    "water": 15,
+    "water": 25,
 }
 
 
@@ -155,18 +165,18 @@ class DiscoveryCandidate:
         return asdict(self)
 
     def prompt_dict(self) -> dict[str, Any]:
-        """Return the compact fields useful to an AI model."""
-        return {
+        """Return the compact fields useful to an AI model, omitting blanks."""
+        values = {
             "entity_id": self.entity_id,
             "name": self.name,
             "device": self.device_name,
-            "domain": self.domain,
             "device_class": self.device_class,
             "unit": self.unit,
-            "state": self.state[:80],
-            "recent_changes": self.activity_count,
+            "state": self.state[:60],
+            "recent_changes": self.activity_count or None,
             "local_relevance": relevance_score(self),
         }
+        return {key: value for key, value in values.items() if value is not None}
 
 
 def relevance_score(candidate: DiscoveryCandidate) -> int:
@@ -201,7 +211,7 @@ def relevance_score(candidate: DiscoveryCandidate) -> int:
 
 
 def eligible_candidates(
-    candidates: list[DiscoveryCandidate], *, limit: int = 400
+    candidates: list[DiscoveryCandidate], *, limit: int = 300
 ) -> list[DiscoveryCandidate]:
     """Keep a bounded, area-balanced inventory for AI evaluation."""
     by_area: dict[str, list[DiscoveryCandidate]] = {}
@@ -215,10 +225,10 @@ def eligible_candidates(
         ranked_areas[area_name] = sorted(
             by_area[area_name],
             key=lambda item: (-relevance_score(item), item.entity_id),
-        )[:60]
+        )[:MAX_PER_AREA]
 
     selected: list[DiscoveryCandidate] = []
-    for position in range(60):
+    for position in range(MAX_PER_AREA):
         for area_name in sorted(ranked_areas):
             area_candidates = ranked_areas[area_name]
             if position < len(area_candidates):
@@ -228,30 +238,122 @@ def eligible_candidates(
     return selected
 
 
+_APPLIANCE_WORDS = (
+    "washer",
+    "dryer",
+    "dishwasher",
+    "fridge",
+    "refrigerator",
+    "freezer",
+    "oven",
+    "stove",
+    "microwave",
+    "dehumidifier",
+    "sump",
+    "pump",
+    "appliance",
+)
+
+
 def default_category(candidate: DiscoveryCandidate) -> str:
-    """Infer an operational category when the AI does not supply one."""
-    text = f"{candidate.entity_id} {candidate.name}".lower()
-    if candidate.domain == "lock" or any(
-        word in text for word in ("door", "window", "garage", "entry")
+    """Infer an operational category when neither the owner nor the AI did."""
+    text = f"{candidate.entity_id} {candidate.name} {candidate.device_name or ''}"
+    text = text.lower()
+    if any(word in text for word in ("spa", "hot_tub", "hot tub", "jacuzzi")):
+        return "spa"
+    if candidate.device_class in {"moisture"} or any(
+        word in text for word in ("leak", "water_meter", "water meter", "flow")
+    ):
+        return "water"
+    if (
+        candidate.domain in {"lock", "cover"}
+        or candidate.device_class
+        in {
+            "door",
+            "garage_door",
+            "window",
+            "opening",
+            "lock",
+        }
+        or any(word in text for word in ("door", "window", "garage", "entry"))
     ):
         return "access"
-    if any(word in text for word in ("spa", "hot_tub", "hot tub")):
-        return "spa"
-    if candidate.domain in {"climate", "humidifier", "water_heater"} or any(
+    if candidate.domain == "water_heater" or "water" in text:
+        return "water"
+    if candidate.domain in {"climate", "humidifier"} or any(
         word in text for word in ("hvac", "thermostat", "heat", "temperature")
     ):
         return "hvac"
-    if candidate.device_class in {"energy", "power"}:
+    if any(word in text for word in _APPLIANCE_WORDS):
+        return "appliance"
+    if candidate.device_class in {"energy", "power", "current"}:
         return "energy"
     if any(word in text for word in ("internet", "router", "starlink", "wan")):
         return "network"
     if candidate.device_class in {"occupancy", "presence"}:
         return "occupancy"
-    if candidate.device_class == "motion" or candidate.domain == "media_player":
+    if candidate.device_class in {"motion", "sound"} or candidate.domain in {
+        "media_player"
+    }:
         return "activity"
     if candidate.domain == "calendar":
         return "reservation"
     return "other"
+
+
+_ENTITY_ID = r"[a-z0-9_]+\.[a-z0-9_]+"
+_LINE = re.compile(
+    rf"^(?P<entity>{_ENTITY_ID})\s*(?:\||;|\t|,|:|\s[-–—]\s)\s*"
+    r"(?P<category>[a-z_ ]+?)\s*(?:\||;|\t|,|:|\s[-–—]\s)\s*(?P<reason>.+)$",
+    flags=re.IGNORECASE,
+)
+_BARE_ENTITY = re.compile(rf"(?<![a-z0-9_.])({_ENTITY_ID})(?![a-z0-9_])", re.I)
+
+
+def _recommendation_rows(text: Any) -> list[tuple[str, str, str]]:
+    """Extract (entity_id, category, reason) rows from tolerant model output."""
+    if isinstance(text, list):
+        rows: list[tuple[str, str, str]] = []
+        for item in text:
+            if isinstance(item, dict):
+                rows.append(
+                    (
+                        str(item.get("entity_id", "")),
+                        str(item.get("category", "")),
+                        str(item.get("reason", "")),
+                    )
+                )
+            else:
+                rows.extend(_recommendation_rows(str(item)))
+        return rows
+
+    raw = str(text or "").strip()
+    if raw.startswith(("[", "{")):
+        try:
+            decoded = json.loads(raw)
+        except ValueError:
+            decoded = None
+        if isinstance(decoded, dict):
+            decoded = decoded.get("recommendations", [decoded])
+        if isinstance(decoded, list):
+            return _recommendation_rows(decoded)
+
+    rows = []
+    for raw_line in raw.splitlines():
+        line = raw_line.strip().strip("`*-•> ").strip()
+        line = line.strip("|").strip()
+        if not line or set(line) <= {"-", "|", ":", " "}:
+            continue
+        line = line.replace("`", "").replace("**", "")
+        if match := _LINE.match(line):
+            rows.append(
+                (
+                    match.group("entity"),
+                    match.group("category"),
+                    match.group("reason"),
+                )
+            )
+    return rows
 
 
 def parse_recommendations(
@@ -260,7 +362,13 @@ def parse_recommendations(
     *,
     confidence: float = 0.0,
 ) -> list[dict[str, Any]]:
-    """Validate line-based AI recommendations against the supplied inventory."""
+    """Validate AI recommendations against the supplied inventory.
+
+    Accepts the requested "entity_id | category | reason" lines plus common
+    drift: other separators, markdown tables or bullets, and JSON. When no
+    row parses, any inventory entity IDs mentioned in the text are accepted
+    with locally inferred categories.
+    """
     known = {candidate.entity_id: candidate for candidate in candidates}
     output: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -269,34 +377,31 @@ def parse_recommendations(
     except (TypeError, ValueError):
         bounded_confidence = 0.0
 
-    for raw_line in str(text or "").splitlines():
-        line = raw_line.strip().strip("`*- ")
-        match = re.match(
-            r"^(?P<entity>[a-z0-9_]+\.[a-z0-9_]+)\s*\|\s*"
-            r"(?P<category>[a-z_]+)\s*\|\s*(?P<reason>.+)$",
-            line,
-            flags=re.IGNORECASE,
-        )
-        if not match:
-            continue
-        entity_id = match.group("entity").lower()
+    def add(entity_id: str, category: str, reason: str) -> None:
+        entity_id = entity_id.strip().lower()
         candidate = known.get(entity_id)
         if candidate is None or entity_id in seen:
-            continue
-        category = match.group("category").lower()
+            return
+        category = category.strip().lower().replace(" ", "_")
         if category not in DISCOVERY_CATEGORIES:
             category = default_category(candidate)
-        reason = match.group("reason").strip()[:300]
         output.append(
             {
                 **candidate.as_dict(),
                 "category": category,
-                "reason": reason,
+                "reason": reason.strip()[:300] or "Selected by AI review.",
                 "confidence": bounded_confidence,
                 "source": "ai",
             }
         )
         seen.add(entity_id)
+
+    for entity_id, category, reason in _recommendation_rows(text):
+        add(entity_id, category, reason)
+
+    if not output and not isinstance(text, list):
+        for match in _BARE_ENTITY.finditer(str(text or "")):
+            add(match.group(1), "", "Mentioned by AI review.")
     return output
 
 

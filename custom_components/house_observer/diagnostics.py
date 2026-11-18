@@ -7,7 +7,12 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import ENTITY_GROUPS
+from .const import (
+    CONF_ALWAYS_MONITOR_DEVICES,
+    CONF_ALWAYS_MONITOR_ENTITIES,
+    CONF_NEVER_MONITOR_DEVICES,
+    CONF_NEVER_MONITOR_ENTITIES,
+)
 from .observer import HouseObserver
 
 
@@ -19,9 +24,17 @@ async def async_get_config_entry_diagnostics(
     options = manager.options
     return {
         "observer": manager.diagnostics(),
-        "entity_group_counts": {
-            group: len(options.get(group, [])) for group in ENTITY_GROUPS
+        "override_counts": {
+            key: len(options.get(key, []))
+            for key in (
+                CONF_ALWAYS_MONITOR_DEVICES,
+                CONF_ALWAYS_MONITOR_ENTITIES,
+                CONF_NEVER_MONITOR_DEVICES,
+                CONF_NEVER_MONITOR_ENTITIES,
+            )
         },
+        "occupancy_entity_configured": bool(options.get("occupancy_entity")),
+        "reservation_entity_count": len(options.get("reservation_entities", [])),
         "summary_time": str(options.get("summary_time")),
         "lookback_hours": options.get("lookback_hours"),
         "retention_days": options.get("retention_days"),

@@ -1,9 +1,8 @@
-"""Event collection, local memory, summaries, and anomaly handling."""
+"""Orchestrates observation, analysis, and memory for one property."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -18,19 +17,15 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant, State, callback
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import area_registry as ar
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
-    async_call_later,
     async_track_state_change_event,
     async_track_time_change,
     async_track_time_interval,
 )
-from homeassistant.helpers.storage import Store
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
+from .ai import AITaskUnavailable, async_generate_data, describe_error
 from .const import (
     CONF_AI_TASK_ENTITY,
     CONF_ALWAYS_MONITOR_DEVICES,
@@ -40,135 +35,78 @@ from .const import (
     CONF_LEARNING_ONLY,
     CONF_LOOKBACK_HOURS,
     CONF_MIN_SAMPLES,
+    CONF_MODE,
     CONF_NEVER_MONITOR_DEVICES,
     CONF_NEVER_MONITOR_ENTITIES,
     CONF_NOTIFY_DAILY,
     CONF_NOTIFY_SERVICE,
     CONF_OBSERVER_GUIDANCE,
+    CONF_OCCUPANCY_ENTITY,
     CONF_PROPERTY_NAME,
     CONF_RESERVATION_ENTITIES,
     CONF_RETENTION_DAYS,
     CONF_SUMMARY_TIME,
     CONF_ZSCORE_THRESHOLD,
+    DATA_CATEGORY_OVERRIDES,
     DEFAULT_ANOMALY_COOLDOWN_MINUTES,
     DEFAULT_AUTO_DISCOVERY,
+    DEFAULT_BASELINE_HALF_LIFE_DAYS,
     DEFAULT_DISCOVERY_INTERVAL_HOURS,
-    DEFAULT_EVENT_DEBOUNCE_SECONDS,
+    DEFAULT_EVENT_WINDOW_SECONDS,
     DEFAULT_LEARNING_ONLY,
     DEFAULT_LOOKBACK_HOURS,
     DEFAULT_MAX_EVENTS,
     DEFAULT_MAX_SUMMARIES,
     DEFAULT_MIN_SAMPLES,
+    DEFAULT_MODE,
     DEFAULT_NOTIFY_DAILY,
     DEFAULT_OBSERVER_GUIDANCE,
     DEFAULT_RETENTION_DAYS,
     DEFAULT_SUMMARY_TIME,
     DEFAULT_ZSCORE_THRESHOLD,
-    DOMAIN,
-    ENTITY_GROUPS,
-    GROUP_LABELS,
+    EVENT_SUMMARY_GENERATED,
+    MODE_RENTAL,
+    MODES,
     SEVERITIES,
-    STORAGE_KEY_PREFIX,
-    STORAGE_VERSION,
 )
-from .discovery import (
-    DiscoveryCandidate,
-    default_category,
-    eligible_candidates,
-    fallback_recommendations,
-    next_discovery_due,
-    parse_recommendations,
-)
+from .discovery import default_category
+from .discovery_manager import DiscoveryManager
 from .guidance import normalize_guidance
-from .models import ObservationEvent, ObserverSummary
+from .ingest import NumericThrottle, minutes_since, safe_attributes
+from .knowledge import (
+    knowledge_context,
+    new_note,
+    previous_summaries,
+    prune_knowledge,
+    recurring_candidate_memories,
+)
+from .models import KnowledgeItem, ObservationEvent, ObserverSummary
+from .notify import async_send, should_notify
+from .occupancy import (
+    next_arrival,
+    resolve_occupancy,
+    stay_expired,
+    stay_reservation,
+)
 from .patterns import PatternEngine, numeric_value
+from .prompts import SUMMARY_STRUCTURE, build_summary_prompt
+from .repairs import async_clear_failure, async_report_failure
 from .reservations import (
     RESERVATION_CHANGED,
     is_reservation_state,
     normalize_reservations,
     safe_reservation_attributes,
 )
+from .selection import SelectionInputs, category_for, effective_entities
 from .semantics import semantic_state
+from .store import ObserverStore
 
 _LOGGER = logging.getLogger(__name__)
 
-_SAFE_ATTRIBUTES = (
-    "battery_level",
-    "current_temperature",
-    "device_class",
-    "hvac_action",
-    "hvac_mode",
-    "mode",
-    "percentage",
-    "preset_mode",
-    "signal_strength",
-    "temperature",
-)
-
-_AI_STRUCTURE: dict[str, Any] = {
-    "summary": {
-        "description": "A concise plain-language operational summary.",
-        "required": True,
-        "selector": {"text": {"multiline": True}},
-    },
-    "severity": {
-        "description": (
-            "Overall operational severity. Return exactly one of: "
-            "normal, note, watch, action."
-        ),
-        "required": True,
-        # Keep this as text instead of a select selector. Some AI Task providers
-        # reject Home Assistant's generated enum schema even when its options
-        # are valid. The returned value is validated against SEVERITIES below.
-        "selector": {"text": {}},
-    },
-    "confidence": {
-        "description": "Confidence from zero to one.",
-        "required": True,
-        # Anthropic structured output rejects JSON Schema numeric bounds.
-        # _as_confidence applies the range locally after generation.
-        "selector": {"number": {}},
-    },
-    "observations": {
-        "description": "Important observations, one per line.",
-        "selector": {"text": {"multiline": True}},
-    },
-    "anomalies": {
-        "description": "Possible anomalies, one per line; blank if none.",
-        "selector": {"text": {"multiline": True}},
-    },
-    "maintenance_notes": {
-        "description": "Possible maintenance items, one per line; blank if none.",
-        "selector": {"text": {"multiline": True}},
-    },
-    "candidate_memories": {
-        "description": (
-            "Reusable property patterns supported by evidence, one per line."
-        ),
-        "selector": {"text": {"multiline": True}},
-    },
-    "notify_owner": {
-        "description": "True only when timely owner attention is justified.",
-        "required": True,
-        "selector": {"boolean": {}},
-    },
-}
-
-_DISCOVERY_AI_STRUCTURE: dict[str, Any] = {
-    "recommendations": {
-        "description": (
-            "One selected entity per line as entity_id | category | concise reason."
-        ),
-        "required": True,
-        "selector": {"text": {"multiline": True}},
-    },
-    "confidence": {
-        "description": "Overall confidence from zero to one.",
-        "required": True,
-        # parse_recommendations applies the range locally after generation.
-        "selector": {"number": {}},
-    },
-}
+MAX_PROMPT_EVENTS = 250
+MAX_PROMPT_STATES = 150
+MAX_PROMPT_BASELINES = 50
+OPEN_STATES = {"open", "opening", "unlocked", "unlocking", "jammed"}
 
 
 def _as_bool(value: Any) -> bool:
@@ -189,9 +127,7 @@ def _as_confidence(value: Any) -> float:
 def _limited_text(value: Any, limit: int = 4000) -> str:
     """Bound model and owner text stored in entity attributes."""
     text = str(value or "").strip()
-    if len(text) <= limit:
-        return text
-    return f"{text[: limit - 1]}…"
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
 
 
 class HouseObserver:
@@ -203,27 +139,28 @@ class HouseObserver:
         self.entry = entry
         self.events: list[ObservationEvent] = []
         self.summaries: list[ObserverSummary] = []
+        self.knowledge: list[KnowledgeItem] = []
         self.stay_context: dict[str, Any] = {}
         self.patterns = PatternEngine()
         self.created_at = dt_util.now().isoformat()
         self.last_anomaly_alert: datetime | None = None
-        self.discovery: dict[str, Any] = {}
-        self.discovery_activity: dict[str, int] = {}
-        self._discovery_candidates: dict[str, DiscoveryCandidate] = {}
-        self._entity_devices: dict[str, str | None] = {}
-        self._store: Store[dict[str, Any]] = Store(
+        self.summary_failures = 0
+        self.last_summary_error: str | None = None
+        self.last_summary_error_at: str | None = None
+        self.discovery = DiscoveryManager(self)
+        self._tracked: list[str] = []
+        self._throttle = NumericThrottle(DEFAULT_EVENT_WINDOW_SECONDS)
+        self._store = ObserverStore(
             hass,
-            STORAGE_VERSION,
-            f"{STORAGE_KEY_PREFIX}{entry.entry_id}",
+            entry.entry_id,
+            set(entry.options.get(CONF_RESERVATION_ENTITIES, [])),
         )
         self._unsubscribers: list[Callable[[], None]] = []
         self._observation_unsubscriber: Callable[[], None] | None = None
-        self._candidate_unsubscriber: Callable[[], None] | None = None
-        self._pending_discovery_refresh: Callable[[], None] | None = None
         self._listeners: set[Callable[[], None]] = set()
-        self._last_numeric_event: dict[str, tuple[datetime, float]] = {}
         self._lock = asyncio.Lock()
-        self._discovery_lock = asyncio.Lock()
+
+    # ----------------------------------------------------------- configuration
 
     @property
     def property_name(self) -> str:
@@ -234,6 +171,7 @@ class HouseObserver:
     def options(self) -> dict[str, Any]:
         """Return options with defaults filled in."""
         return {
+            CONF_MODE: DEFAULT_MODE,
             CONF_LOOKBACK_HOURS: DEFAULT_LOOKBACK_HOURS,
             CONF_RETENTION_DAYS: DEFAULT_RETENTION_DAYS,
             CONF_LEARNING_ONLY: DEFAULT_LEARNING_ONLY,
@@ -248,33 +186,10 @@ class HouseObserver:
         }
 
     @property
-    def tracked_entities(self) -> list[str]:
-        """Return manual, discovered, and user-forced entity IDs."""
-        entities: set[str] = set()
-        for group in ENTITY_GROUPS:
-            entities.update(self.options.get(group, []))
-
-        if self.options[CONF_AUTO_DISCOVERY]:
-            entities.update(
-                item["entity_id"]
-                for item in self.discovery.get("recommendations", [])
-                if item.get("entity_id")
-            )
-        entities.update(self.options.get(CONF_ALWAYS_MONITOR_ENTITIES, []))
-
-        always_devices = set(self.options.get(CONF_ALWAYS_MONITOR_DEVICES, []))
-        never_devices = set(self.options.get(CONF_NEVER_MONITOR_DEVICES, []))
-        for candidate in self._discovery_candidates.values():
-            if candidate.device_id in always_devices:
-                entities.add(candidate.entity_id)
-
-        entities.difference_update(self.options.get(CONF_NEVER_MONITOR_ENTITIES, []))
-        entities = {
-            entity_id
-            for entity_id in entities
-            if self._entity_devices.get(entity_id) not in never_devices
-        }
-        return sorted(entities)
+    def mode(self) -> str:
+        """Return home or rental."""
+        mode = str(self.options[CONF_MODE])
+        return mode if mode in MODES else DEFAULT_MODE
 
     @property
     def learning_only(self) -> bool:
@@ -286,6 +201,44 @@ class HouseObserver:
         """Return bounded persistent owner guidance for AI summaries."""
         return normalize_guidance(self.options.get(CONF_OBSERVER_GUIDANCE, ""))
 
+    @property
+    def tracked_entities(self) -> list[str]:
+        """Return the effective monitored entity set."""
+        return list(self._tracked)
+
+    @property
+    def status(self) -> str:
+        """Return learning, active, or error."""
+        discovery_failing = (
+            bool(self.options[CONF_AUTO_DISCOVERY]) and self.discovery.failures > 0
+        )
+        if discovery_failing or self.summary_failures > 0:
+            return "error"
+        return "learning" if self.learning_only else "active"
+
+    @property
+    def last_error(self) -> dict[str, Any] | None:
+        """Return the newest unresolved error, if any."""
+        errors = []
+        if self.summary_failures and self.last_summary_error:
+            errors.append(
+                ("summary", self.last_summary_error, self.last_summary_error_at)
+            )
+        if self.discovery.failures and self.discovery.last_error:
+            errors.append(
+                (
+                    "discovery",
+                    self.discovery.last_error,
+                    self.discovery.state.get("last_error_at"),
+                )
+            )
+        if not errors:
+            return None
+        source, message, when = max(errors, key=lambda item: item[2] or "")
+        return {"source": source, "message": message, "at": when}
+
+    # --------------------------------------------------------------- lifecycle
+
     async def async_start(self) -> None:
         """Load memory and begin observing."""
         stored = await self._store.async_load() or {}
@@ -295,84 +248,66 @@ class HouseObserver:
         self.summaries = [
             ObserverSummary.from_dict(value) for value in stored.get("summaries", [])
         ]
+        self.knowledge = [
+            KnowledgeItem.from_dict(value) for value in stored.get("knowledge", [])
+        ]
         self.stay_context = dict(stored.get("stay_context", {}))
-        self.discovery = dict(stored.get("discovery", {}))
-        self.discovery_activity = {
-            str(key): int(value)
-            for key, value in stored.get("discovery_activity", {}).items()
-        }
+        self.discovery.load(
+            stored.get("discovery", {}), stored.get("discovery_activity", {})
+        )
         self.created_at = str(stored.get("created_at", self.created_at))
+        self.summary_failures = int(stored.get("summary_failures", 0))
+        self.last_summary_error = stored.get("last_summary_error")
+        self.last_summary_error_at = stored.get("last_summary_error_at")
         self.patterns = PatternEngine(
             stored.get("patterns"),
             minimum_samples=int(self.options[CONF_MIN_SAMPLES]),
             zscore_threshold=float(self.options[CONF_ZSCORE_THRESHOLD]),
+            half_life_days=DEFAULT_BASELINE_HALF_LIFE_DAYS,
         )
         if value := stored.get("last_anomaly_alert"):
             self.last_anomaly_alert = dt_util.parse_datetime(str(value))
 
         self._prune()
-        self._refresh_discovery_candidates()
-        self._scrub_reservation_memory()
-        self._normalize_binary_memory()
-        self._rebind_observation_listener()
-        if self.options[CONF_AUTO_DISCOVERY]:
-            if self._discovery_candidates:
-                self._candidate_unsubscriber = async_track_state_change_event(
-                    self.hass,
-                    list(self._discovery_candidates),
-                    self._async_discovery_candidate_changed,
-                )
-            self._unsubscribers.append(
-                async_track_time_interval(
-                    self.hass,
-                    self._async_discovery_check,
-                    timedelta(hours=1),
-                )
-            )
-            for event_type in (
-                "entity_registry_updated",
-                "device_registry_updated",
-                "area_registry_updated",
-            ):
-                self._unsubscribers.append(
-                    self.hass.bus.async_listen(
-                        event_type, self._async_discovery_registry_changed
-                    )
-                )
-            if self._discovery_is_due():
-                self._unsubscribers.append(
-                    async_call_later(self.hass, 15, self._async_discovery_check)
-                )
+        self.async_selection_changed()
+
         hour, minute, second = self._summary_time_parts()
-        self._unsubscribers.append(
-            async_track_time_change(
-                self.hass,
-                self._async_daily_summary,
-                hour=hour,
-                minute=minute,
-                second=second,
-            )
+        self._unsubscribers.extend(
+            [
+                async_at_started(self.hass, self._async_hass_started),
+                async_track_time_change(
+                    self.hass,
+                    self._async_daily_summary,
+                    hour=hour,
+                    minute=minute,
+                    second=second,
+                ),
+                async_track_time_interval(
+                    self.hass, self._async_hourly_maintenance, timedelta(hours=1)
+                ),
+                self.hass.bus.async_listen_once(
+                    EVENT_HOMEASSISTANT_STOP, self._async_home_assistant_stop
+                ),
+            ]
         )
-        self._unsubscribers.append(
-            self.hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STOP, self._async_home_assistant_stop
-            )
-        )
-        self._notify_listeners()
+
+    @callback
+    def _async_hass_started(self, _hass: HomeAssistant) -> None:
+        """Index registries once every integration has created its entities."""
+        self.discovery.async_start()
+        self.async_selection_changed()
 
     async def async_stop(self) -> None:
         """Stop observing and persist immediately."""
         if self._observation_unsubscriber:
             self._observation_unsubscriber()
             self._observation_unsubscriber = None
-        if self._candidate_unsubscriber:
-            self._candidate_unsubscriber()
-            self._candidate_unsubscriber = None
-        if self._pending_discovery_refresh:
-            self._pending_discovery_refresh()
-            self._pending_discovery_refresh = None
+        self.discovery.async_stop()
         while self._unsubscribers:
             self._unsubscribers.pop()()
+        await self._store.async_save(self._storage_payload())
+
+    async def _async_home_assistant_stop(self, _event: Event) -> None:
         await self._store.async_save(self._storage_payload())
 
     @callback
@@ -387,370 +322,68 @@ class HouseObserver:
         return remove_listener
 
     @callback
-    def _notify_listeners(self) -> None:
+    def notify_listeners(self) -> None:
         """Notify observer entities of new data."""
-        for listener in self._listeners:
+        for listener in list(self._listeners):
             listener()
 
-    def _refresh_discovery_candidates(self) -> None:
-        """Build a privacy-conscious inventory from Home Assistant registries."""
-        entity_registry = er.async_get(self.hass)
-        device_registry = dr.async_get(self.hass)
-        area_registry = ar.async_get(self.hass)
-        candidates: list[DiscoveryCandidate] = []
-        self._entity_devices = {}
-        configured_reservations = set(
-            self.options.get(CONF_RESERVATION_ENTITIES, [])
-        )
+    @callback
+    def schedule_save(self) -> None:
+        """Coalesce storage writes."""
+        self._store.async_delay_save(self._storage_payload, 15)
 
-        for entry in entity_registry.entities.values():
-            if (
-                entry.disabled_by is not None
-                or entry.hidden_by is not None
-                or entry.platform == DOMAIN
-            ):
-                continue
-            state = self.hass.states.get(entry.entity_id)
-            if state is None:
-                continue
-            device = (
-                device_registry.async_get(entry.device_id) if entry.device_id else None
-            )
-            if device is not None and device.disabled_by is not None:
-                continue
-            self._entity_devices[entry.entity_id] = entry.device_id
-            area_id = entry.area_id or (device.area_id if device else None)
-            area = area_registry.async_get_area(area_id) if area_id else None
-            category = getattr(entry.entity_category, "value", entry.entity_category)
-            device_class = state.attributes.get("device_class") or getattr(
-                entry, "original_device_class", None
-            )
-            candidate = DiscoveryCandidate(
-                entity_id=entry.entity_id,
-                name=state.name,
-                state=(
-                    RESERVATION_CHANGED
-                    if is_reservation_state(
-                        entry.entity_id, state.attributes, configured_reservations
-                    )
-                    else semantic_state(entry.entity_id, state.state, state.attributes)
-                ),
-                domain=entry.entity_id.split(".", 1)[0],
-                device_class=str(device_class) if device_class else None,
-                unit=state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
-                entity_category=str(category) if category else None,
-                device_id=entry.device_id,
-                device_name=(
-                    str(device.name_by_user or device.name) if device else None
-                ),
-                area_id=area_id,
-                area_name=str(area.name) if area else "Unassigned",
-                activity_count=int(self.discovery_activity.get(entry.entity_id, 0)),
-            )
-            candidates.append(candidate)
-
-        self._discovery_candidates = {
-            item.entity_id: item for item in eligible_candidates(candidates)
-        }
-
-    def _scrub_reservation_memory(self) -> None:
-        """Remove booking and guest details retained by earlier versions."""
-        configured = set(self.options.get(CONF_RESERVATION_ENTITIES, []))
-        reservation_ids = set(configured)
-        candidate_ids = {
-            event.entity_id for event in self.events
-        } | set(self.patterns.entities)
-        for entity_id in candidate_ids:
-            state = self.hass.states.get(entity_id)
-            if state is not None and is_reservation_state(
-                entity_id, state.attributes, configured
-            ):
-                reservation_ids.add(entity_id)
-
-        for observation in self.events:
-            if (
-                observation.category == "reservation"
-                or observation.entity_id in reservation_ids
-            ):
-                observation.category = "reservation"
-                observation.old_state = (
-                    RESERVATION_CHANGED if observation.old_state is not None else None
-                )
-                observation.new_state = RESERVATION_CHANGED
-                observation.attributes = {}
-
-        for entity_id in reservation_ids:
-            record = self.patterns.entities.get(entity_id)
-            if not record:
-                continue
-            count = sum(int(value) for value in record.get("state_counts", {}).values())
-            record["state_counts"] = ({RESERVATION_CHANGED: count} if count else {})
-
-    def _normalize_binary_memory(self) -> None:
-        """Translate binary states retained by earlier versions."""
-        for observation in self.events:
-            state = self.hass.states.get(observation.entity_id)
-            attributes = observation.attributes
-            if state is not None and "device_class" not in attributes:
-                attributes = state.attributes
-            if observation.old_state is not None:
-                observation.old_state = semantic_state(
-                    observation.entity_id, observation.old_state, attributes
-                )
-            observation.new_state = semantic_state(
-                observation.entity_id, observation.new_state, attributes
-            )
-
-        for entity_id, record in self.patterns.entities.items():
-            state = self.hass.states.get(entity_id)
-            if state is None or not entity_id.startswith("binary_sensor."):
-                continue
-            normalized: dict[str, int] = {}
-            for value, count in record.get("state_counts", {}).items():
-                label = semantic_state(entity_id, value, state.attributes)
-                normalized[label] = normalized.get(label, 0) + int(count)
-            record["state_counts"] = normalized
-            if last_state := record.get("last_state"):
-                record["last_state"] = semantic_state(
-                    entity_id, last_state, state.attributes
-                )
+    # --------------------------------------------------------------- selection
 
     @callback
-    def _rebind_observation_listener(self) -> None:
-        """Listen only to the currently effective monitored entity set."""
-        if self._observation_unsubscriber:
-            self._observation_unsubscriber()
-            self._observation_unsubscriber = None
-        if self.tracked_entities:
-            self._observation_unsubscriber = async_track_state_change_event(
-                self.hass,
-                self.tracked_entities,
-                self._async_state_changed,
-            )
-
-    @callback
-    def _async_discovery_candidate_changed(self, event: Event) -> None:
-        """Learn which eligible entities actually change, without retaining states."""
-        entity_id = str(event.data.get("entity_id", ""))
-        old_state: State | None = event.data.get("old_state")
-        new_state: State | None = event.data.get("new_state")
-        if not entity_id or new_state is None:
-            return
-        if old_state is not None and old_state.state == new_state.state:
-            return
-        self.discovery_activity[entity_id] = min(
-            1_000_000, int(self.discovery_activity.get(entity_id, 0)) + 1
-        )
-        if candidate := self._discovery_candidates.get(entity_id):
-            candidate.activity_count = self.discovery_activity[entity_id]
-        self._schedule_save()
-
-    def _successful_discovery_runs(self) -> int:
-        """Return the persisted successful AI run count with beta migration."""
-        default = 1 if self.discovery.get("ai_generated") else 0
-        try:
-            return max(0, int(self.discovery.get("successful_ai_runs", default)))
-        except (TypeError, ValueError):
-            return default
-
-    def _discovery_next_run(self) -> datetime | None:
-        """Return the next scheduled automatic discovery time."""
-        last_run = dt_util.parse_datetime(str(self.discovery.get("last_run", "")))
-        if last_run is None:
-            return None
-        bootstrap_started_at = dt_util.parse_datetime(
-            str(self.discovery.get("bootstrap_started_at", ""))
-        )
-        if bootstrap_started_at is None:
-            bootstrap_started_at = last_run
-        return next_discovery_due(
-            last_run=last_run,
-            bootstrap_started_at=bootstrap_started_at,
-            successful_ai_runs=self._successful_discovery_runs(),
-            ai_generated=bool(self.discovery.get("ai_generated")),
-            configured_interval_hours=int(
-                self.options[CONF_DISCOVERY_INTERVAL_HOURS]
+    def async_selection_changed(self) -> None:
+        """Recompute the monitored set and listen only to it."""
+        options = self.options
+        tracked = effective_entities(
+            self.discovery.index,
+            SelectionInputs(
+                auto_discovery=bool(options[CONF_AUTO_DISCOVERY]),
+                recommendations=self.discovery.recommendations,
+                pinned_entities=options.get(CONF_ALWAYS_MONITOR_ENTITIES, []),
+                pinned_devices=options.get(CONF_ALWAYS_MONITOR_DEVICES, []),
+                ignored_entities=options.get(CONF_NEVER_MONITOR_ENTITIES, []),
+                ignored_devices=options.get(CONF_NEVER_MONITOR_DEVICES, []),
             ),
         )
-
-    def _discovery_is_due(self, now: datetime | None = None) -> bool:
-        """Return whether automatic discovery should be refreshed."""
-        next_run = self._discovery_next_run()
-        return next_run is None or (now or dt_util.now()) >= next_run
-
-    @callback
-    def _async_discovery_check(self, now: datetime) -> None:
-        """Schedule discovery when its learning interval has elapsed."""
-        if not self.options[CONF_AUTO_DISCOVERY] or not self._discovery_is_due(now):
-            return
-        self.entry.async_create_task(
-            self.hass,
-            self.async_discover_entities(reason="scheduled"),
-            f"Discover important {self.property_name} entities",
-        )
-
-    @callback
-    def _async_discovery_registry_changed(self, _event: Event) -> None:
-        """Queue one discovery review after registry changes settle."""
-        if not self.options[CONF_AUTO_DISCOVERY]:
-            return
-        if self._pending_discovery_refresh:
-            self._pending_discovery_refresh()
-        self._pending_discovery_refresh = async_call_later(
-            self.hass, 3600, self._async_registry_discovery
-        )
-
-    @callback
-    def _async_registry_discovery(self, _now: datetime) -> None:
-        """Review entity choices after a device, entity, or area change."""
-        self._pending_discovery_refresh = None
-        if not self.options[CONF_AUTO_DISCOVERY]:
-            return
-        self.entry.async_create_task(
-            self.hass,
-            self.async_discover_entities(reason="registry_change"),
-            f"Refresh important {self.property_name} entities",
-        )
-
-    async def async_discover_entities(self, *, reason: str) -> dict[str, Any]:
-        """Ask the configured AI to choose a minimal operational entity set."""
-        async with self._discovery_lock:
-            return await self._async_discover_entities_locked(reason)
-
-    async def _async_discover_entities_locked(self, reason: str) -> dict[str, Any]:
-        """Run one serialized entity discovery operation."""
-        self._refresh_discovery_candidates()
-        candidates = list(self._discovery_candidates.values())
-        recommendations: list[dict[str, Any]] = []
-        ai_generated = False
-
-        if candidates and self.hass.services.has_service("ai_task", "generate_data"):
-            by_area: dict[str, list[dict[str, Any]]] = {}
-            for candidate in candidates:
-                by_area.setdefault(candidate.area_name, []).append(
-                    candidate.prompt_dict()
+        if tracked != self._tracked or self._observation_unsubscriber is None:
+            self._throttle.forget(set(self._tracked) - set(tracked))
+            self._tracked = tracked
+            if self._observation_unsubscriber:
+                self._observation_unsubscriber()
+                self._observation_unsubscriber = None
+            if tracked:
+                self._observation_unsubscriber = async_track_state_change_event(
+                    self.hass, tracked, self._async_state_changed
                 )
-            service_data: dict[str, Any] = {
-                "task_name": f"{self.property_name} entity discovery",
-                "instructions": self._build_discovery_prompt(by_area),
-                "structure": _DISCOVERY_AI_STRUCTURE,
-            }
-            if ai_entity := self.options.get(CONF_AI_TASK_ENTITY):
-                service_data["entity_id"] = ai_entity
-            try:
-                response = await self.hass.services.async_call(
-                    "ai_task",
-                    "generate_data",
-                    service_data,
-                    blocking=True,
-                    return_response=True,
-                )
-                data = response.get("data") if isinstance(response, dict) else None
-                if isinstance(data, dict):
-                    recommendations = parse_recommendations(
-                        data.get("recommendations"),
-                        candidates,
-                        confidence=data.get("confidence", 0),
-                    )
-                    ai_generated = bool(recommendations)
-            except (HomeAssistantError, TimeoutError, ValueError):
-                _LOGGER.exception("Unable to run House Observer entity discovery")
+        self.notify_listeners()
 
-        if not recommendations:
-            recommendations = fallback_recommendations(candidates)
-
-        completed_at = dt_util.now()
-        successful_ai_runs = self._successful_discovery_runs()
-        bootstrap_started_at = self.discovery.get("bootstrap_started_at")
-        if not bootstrap_started_at and successful_ai_runs:
-            bootstrap_started_at = self.discovery.get("last_run")
-        if ai_generated:
-            successful_ai_runs += 1
-            if not bootstrap_started_at:
-                bootstrap_started_at = completed_at.isoformat()
-
-        self.discovery = {
-            "last_run": completed_at.isoformat(),
-            "reason": reason,
-            "ai_generated": ai_generated,
-            "candidate_count": len(candidates),
-            "successful_ai_runs": successful_ai_runs,
-            "bootstrap_started_at": bootstrap_started_at,
-            "recommendations": recommendations,
-        }
-        self.discovery_activity = {
-            entity_id: 0 for entity_id in self.discovery_activity
-        }
-        self._rebind_observation_listener()
-        self._schedule_save()
-        self._notify_listeners()
-        response = self.discovery_response()
-        self.hass.bus.async_fire("house_observer_discovery_completed", response)
-        return response
-
-    def discovery_response(self) -> dict[str, Any]:
-        """Return a bounded, user-facing discovery result."""
-        recommendations = self.discovery.get("recommendations", [])
-        device_ids = {item.get("device_id") for item in recommendations}
-        device_ids.discard(None)
-        successful_ai_runs = self._successful_discovery_runs()
-        next_run = self._discovery_next_run()
-        if not self.discovery.get("last_run"):
-            schedule_phase = "initial"
-        elif not self.discovery.get("ai_generated"):
-            schedule_phase = "daily_retry"
-        elif successful_ai_runs <= 3:
-            schedule_phase = (
-                "24_hour_followup",
-                "3_day_followup",
-                "7_day_followup",
-            )[successful_ai_runs - 1]
-        else:
-            schedule_phase = "mature"
-        return {
-            "last_run": self.discovery.get("last_run"),
-            "next_run": next_run.isoformat() if next_run else None,
-            "reason": self.discovery.get("reason"),
-            "ai_generated": bool(self.discovery.get("ai_generated")),
-            "successful_ai_runs": successful_ai_runs,
-            "schedule_phase": schedule_phase,
-            "candidate_count": int(self.discovery.get("candidate_count", 0)),
-            "recommended_device_count": len(device_ids),
-            "recommended_entity_count": len(recommendations),
-            "tracked_entity_count": len(self.tracked_entities),
-            "recommendations": recommendations[:100],
-        }
-
-    def _build_discovery_prompt(
-        self, inventory_by_area: dict[str, list[dict[str, Any]]]
-    ) -> str:
-        """Build the area-aware device and entity selection prompt."""
-        return (
-            "You are selecting Home Assistant telemetry for a concise operational "
-            "house summary. Review every supplied area, but choose the smallest useful "
-            "set. Prefer exterior access, meaningful activity or occupancy indicators, "
-            "HVAC and room comfort, water or leak conditions, Internet availability, "
-            "important energy loads, and operational equipment. Avoid redundant "
-            "entities from the same device, noisy controls, configuration entities, "
-            "and values that would not change a house summary. Recent_changes is a "
-            "local activity count and local_relevance is a preliminary non-AI hint, "
-            "not an instruction. Do not infer identities, motives, or surveillance. "
-            "Use only entity IDs in the inventory. Output exactly one line per "
-            "selected entity as: entity_id | category | concise reason. Allowed "
-            "categories: "
-            "access, activity, occupancy, spa, hvac, network, energy, reservation, "
-            "other. It is valid to select nothing from an area.\n\n"
-            "Area inventory JSON:\n"
-            f"{json.dumps(inventory_by_area, separators=(',', ':'), default=str)}"
+    def category_for(self, entity_id: str) -> str:
+        """Return an entity's operational category."""
+        candidate = self.discovery.all_candidates.get(entity_id)
+        return category_for(
+            entity_id,
+            index=self.discovery.index,
+            overrides=dict(self.entry.data.get(DATA_CATEGORY_OVERRIDES, {})),
+            recommendations=self.discovery.recommendations,
+            fallback=default_category(candidate) if candidate else "other",
         )
+
+    def _reservation_entities(self) -> set[str]:
+        return set(self.options.get(CONF_RESERVATION_ENTITIES, []))
+
+    # ----------------------------------------------------------------- ingest
 
     @callback
     def _async_state_changed(self, event: Event) -> None:
-        """Schedule processing for a state-change event."""
         self.entry.async_create_task(
             self.hass,
             self._async_process_state_change(event),
             f"Process {self.property_name} observation",
+            eager_start=True,
         )
 
     async def _async_process_state_change(self, event: Event) -> None:
@@ -762,62 +395,59 @@ class HouseObserver:
         if old_state is not None and old_state.state == new_state.state:
             return
 
+        entity_id = new_state.entity_id
         observed_at = dt_util.as_local(new_state.last_updated)
-        configured_reservations = set(
-            self.options.get(CONF_RESERVATION_ENTITIES, [])
-        )
         reservation = is_reservation_state(
-            new_state.entity_id, new_state.attributes, configured_reservations
+            entity_id, new_state.attributes, self._reservation_entities()
         )
-        category = (
-            "reservation" if reservation else self._category_for(new_state.entity_id)
-        )
-        observed_state = (
-            RESERVATION_CHANGED
-            if reservation
-            else semantic_state(
-                new_state.entity_id, new_state.state, new_state.attributes
+        if reservation:
+            category = "reservation"
+            observed_state = RESERVATION_CHANGED
+            observed_old = RESERVATION_CHANGED if old_state is not None else None
+            attributes = safe_reservation_attributes(new_state.attributes)
+        else:
+            category = self.category_for(entity_id)
+            observed_state = semantic_state(
+                entity_id, new_state.state, new_state.attributes
             )
-        )
-        observed_old_state = (
-            RESERVATION_CHANGED
-            if reservation and old_state is not None
-            else semantic_state(
-                old_state.entity_id, old_state.state, old_state.attributes
+            observed_old = (
+                semantic_state(entity_id, old_state.state, old_state.attributes)
+                if old_state is not None
+                else None
             )
-            if old_state is not None
-            else None
-        )
-        attributes = (
-            safe_reservation_attributes(new_state.attributes)
-            if reservation
-            else self._safe_attributes(new_state)
-        )
-        numeric = numeric_value(observed_state)
-        if numeric is not None and self._debounce_numeric(
-            new_state.entity_id, observed_at, numeric
-        ):
-            return
+            attributes = safe_attributes(dict(new_state.attributes))
 
         async with self._lock:
-            anomaly = self.patterns.observe(
-                new_state.entity_id, observed_state, observed_at
+            anomaly = self.patterns.observe(entity_id, observed_state, observed_at)
+            numeric = numeric_value(observed_state)
+            if numeric is not None:
+                window = self._throttle.offer(
+                    entity_id, observed_at, numeric, anomalous=anomaly is not None
+                )
+                if window is None:
+                    self.schedule_save()
+                    return
+                attributes.update(window)
+
+            self.events.append(
+                ObservationEvent(
+                    timestamp=observed_at.isoformat(),
+                    entity_id=entity_id,
+                    name=str(
+                        new_state.attributes.get(ATTR_FRIENDLY_NAME, new_state.name)
+                    ),
+                    category=category,
+                    old_state=observed_old,
+                    new_state=observed_state,
+                    unit=new_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
+                    attributes=attributes,
+                    anomaly=anomaly,
+                )
             )
-            observation = ObservationEvent(
-                timestamp=observed_at.isoformat(),
-                entity_id=new_state.entity_id,
-                name=str(new_state.attributes.get(ATTR_FRIENDLY_NAME, new_state.name)),
-                category=category,
-                old_state=observed_old_state,
-                new_state=observed_state,
-                unit=new_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
-                attributes=attributes,
-                anomaly=anomaly,
-            )
-            self.events.append(observation)
-            self._prune()
-            self._schedule_save()
-            self._notify_listeners()
+            if len(self.events) > DEFAULT_MAX_EVENTS:
+                self._prune()
+            self.schedule_save()
+            self.notify_listeners()
 
         if anomaly and not self.learning_only and self._anomaly_alert_due(observed_at):
             self.last_anomaly_alert = observed_at
@@ -827,93 +457,183 @@ class HouseObserver:
                 f"Generate {self.property_name} anomaly summary",
             )
 
-    def _debounce_numeric(
-        self, entity_id: str, observed_at: datetime, value: float
-    ) -> bool:
-        """Avoid turning high-frequency numeric telemetry into event spam."""
-        previous = self._last_numeric_event.get(entity_id)
-        if previous is not None:
-            previous_time, _ = previous
-            if (
-                observed_at - previous_time
-            ).total_seconds() < DEFAULT_EVENT_DEBOUNCE_SECONDS:
-                return True
-        self._last_numeric_event[entity_id] = (observed_at, value)
-        return False
-
     def _anomaly_alert_due(self, now: datetime) -> bool:
-        """Rate limit proactive anomaly analysis."""
         if self.last_anomaly_alert is None:
             return True
         return now - self.last_anomaly_alert >= timedelta(
             minutes=DEFAULT_ANOMALY_COOLDOWN_MINUTES
         )
 
+    # ------------------------------------------------------------ maintenance
+
     @callback
-    def _async_daily_summary(self, now: datetime) -> None:
-        """Schedule the daily summary."""
+    def _async_hourly_maintenance(self, now: datetime) -> None:
+        """Expire a finished stay and prune bounded memory."""
+        changed = False
+        if self.stay_context and stay_expired(self.stay_context, dt_util.now()):
+            self.stay_context = {}
+            changed = True
+        before = len(self.knowledge)
+        self._prune()
+        if changed or before != len(self.knowledge):
+            self.schedule_save()
+            self.notify_listeners()
+
+    def _prune(self) -> None:
+        """Bound retained memory by age and count."""
+        now = dt_util.now()
+        cutoff = now - timedelta(days=int(self.options[CONF_RETENTION_DAYS]))
+        self.events = [
+            event
+            for event in self.events
+            if (when := event.when) is not None and when >= cutoff
+        ][-DEFAULT_MAX_EVENTS:]
+        self.summaries = self.summaries[-DEFAULT_MAX_SUMMARIES:]
+        self.knowledge = prune_knowledge(self.knowledge, now)
+
+    def events_since(self, hours: float) -> list[ObservationEvent]:
+        """Return recent events."""
+        cutoff = dt_util.now() - timedelta(hours=hours)
+        return [
+            event
+            for event in self.events
+            if (when := event.when) is not None and when >= cutoff
+        ]
+
+    # -------------------------------------------------------------- knowledge
+
+    async def async_record_note(
+        self,
+        note: str,
+        category: str = "owner",
+        expires_in_days: float | None = None,
+    ) -> KnowledgeItem:
+        """Add durable property knowledge that every summary will see."""
+        item = new_note(note, category, dt_util.now(), expires_in_days=expires_in_days)
+        self.knowledge.append(item)
+        self._prune()
+        self.schedule_save()
+        self.notify_listeners()
+        return item
+
+    async def async_forget_note(self, note_id: str) -> bool:
+        """Remove a knowledge item, returning whether it existed."""
+        before = len(self.knowledge)
+        self.knowledge = [item for item in self.knowledge if item.note_id != note_id]
+        if removed := len(self.knowledge) != before:
+            self.schedule_save()
+            self.notify_listeners()
+        return removed
+
+    # -------------------------------------------------------------- occupancy
+
+    async def async_set_stay_context(self, context: dict[str, Any]) -> None:
+        """Set or clear the manually supplied stay."""
+        self.stay_context = context
+        self.schedule_save()
+        self.notify_listeners()
+
+    def occupancy_context(
+        self, now: datetime | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, list[dict[str, Any]]]:
+        """Return (occupancy, normalized stay, normalized reservations)."""
+        now = now or dt_util.now()
+        occupancy_entity = self.options.get(CONF_OCCUPANCY_ENTITY)
+        entity_state = (
+            state.state
+            if occupancy_entity and (state := self.hass.states.get(occupancy_entity))
+            else None
+        )
+        if self.mode != MODE_RENTAL:
+            # Stays and booking calendars only mean occupancy for a rental.
+            occupancy = resolve_occupancy(
+                entity_state=entity_state, stay=None, reservations=[]
+            )
+            occupancy["next_arrival"] = None
+            return occupancy, None, []
+
+        stay = (
+            stay_reservation(self.stay_context, now)
+            if self.stay_context and not stay_expired(self.stay_context, now)
+            else None
+        )
+        reservation_values: list[dict[str, Any]] = []
+        for entity_id in sorted(self._reservation_entities() | set(self._tracked)):
+            state = self.hass.states.get(entity_id)
+            if state is not None and is_reservation_state(
+                entity_id, state.attributes, self._reservation_entities()
+            ):
+                reservation_values.append(
+                    {"entity_id": entity_id, "attributes": state.attributes}
+                )
+        reservations = normalize_reservations(reservation_values, now)
+        occupancy = resolve_occupancy(
+            entity_state=entity_state, stay=stay, reservations=reservations
+        )
+        occupancy["next_arrival"] = next_arrival(stay, reservations)
+        return occupancy, stay, reservations
+
+    # ---------------------------------------------------------------- summary
+
+    @callback
+    def _async_daily_summary(self, _now: datetime) -> None:
         self.entry.async_create_task(
             self.hass,
             self.async_generate_summary(
-                reason="daily",
-                hours=int(self.options[CONF_LOOKBACK_HOURS]),
+                reason="daily", hours=int(self.options[CONF_LOOKBACK_HOURS])
             ),
             f"Generate {self.property_name} daily summary",
         )
 
-    async def _async_home_assistant_stop(self, event: Event) -> None:
-        """Persist data during Home Assistant shutdown."""
-        await self._store.async_save(self._storage_payload())
+    def _summary_time_parts(self) -> tuple[int, int, int]:
+        raw = self.options.get(CONF_SUMMARY_TIME, DEFAULT_SUMMARY_TIME)
+        if hasattr(raw, "hour"):
+            return int(raw.hour), int(raw.minute), int(raw.second)
+        try:
+            parts = [int(value) for value in str(raw).split(":")]
+            return parts[0], parts[1], parts[2] if len(parts) > 2 else 0
+        except (TypeError, ValueError, IndexError):
+            return 8, 0, 0
 
     async def async_generate_summary(
         self, *, reason: str = "manual", hours: int | None = None
     ) -> ObserverSummary:
         """Generate and store an operational summary."""
         period_hours = hours or int(self.options[CONF_LOOKBACK_HOURS])
-        context = self._build_context(period_hours)
+        context = self.build_context(period_hours)
+        occupancy = context["occupancy"]["state"]
         result: dict[str, Any] | None = None
-        ai_generated = False
-        fallback_observation = (
-            "The ai_task.generate_data action is unavailable; this is a "
-            "deterministic summary."
-        )
-
-        if self.hass.services.has_service("ai_task", "generate_data"):
-            fallback_observation = (
-                "AI Task returned an unexpected response; this is a deterministic "
-                "summary. Check the Home Assistant logs for details."
+        error: str | None = None
+        try:
+            result = await async_generate_data(
+                self.hass,
+                task_name=f"{self.property_name} house observer summary",
+                instructions=build_summary_prompt(
+                    mode=self.mode,
+                    occupancy=occupancy,
+                    guidance=self.observer_guidance,
+                    reason=reason,
+                    context=context,
+                ),
+                structure=SUMMARY_STRUCTURE,
+                entity_id=self.options.get(CONF_AI_TASK_ENTITY),
             )
-            service_data: dict[str, Any] = {
-                "task_name": f"{self.property_name} house observer summary",
-                "instructions": self._build_prompt(context, reason),
-                "structure": _AI_STRUCTURE,
-            }
-            if ai_entity := self.options.get(CONF_AI_TASK_ENTITY):
-                service_data["entity_id"] = ai_entity
-            try:
-                response = await self.hass.services.async_call(
-                    "ai_task",
-                    "generate_data",
-                    service_data,
-                    blocking=True,
-                    return_response=True,
-                )
-                if isinstance(response, dict) and isinstance(
-                    response.get("data"), dict
-                ):
-                    result = response["data"]
-                    ai_generated = True
-            except (HomeAssistantError, TimeoutError, ValueError):
-                fallback_observation = (
-                    "The AI Task request failed; this is a deterministic summary. "
-                    "Check the Home Assistant logs for details."
-                )
-                _LOGGER.exception("Unable to generate House Observer AI summary")
+        except AITaskUnavailable as err:
+            error = str(err)
+        except Exception as err:  # noqa: BLE001 - any failure must be recorded
+            error = describe_error(err)
+            _LOGGER.warning(
+                "House Observer summary for %s failed: %s",
+                self.property_name,
+                error,
+                exc_info=_LOGGER.isEnabledFor(logging.DEBUG),
+            )
 
+        self._record_summary_outcome(error)
         if result is None:
-            result = self._fallback_summary(context, fallback_observation)
+            result = self._fallback_summary(context, error or "unknown error")
 
-        severity = str(result.get("severity", "normal")).lower()
+        severity = str(result.get("severity", "normal")).strip().lower()
         if severity not in SEVERITIES:
             severity = "note"
         summary = ObserverSummary(
@@ -930,84 +650,52 @@ class HouseObserver:
             maintenance_notes=_limited_text(result.get("maintenance_notes", "")),
             candidate_memories=_limited_text(result.get("candidate_memories", "")),
             notify_owner=_as_bool(result.get("notify_owner", False)),
-            ai_generated=ai_generated,
+            ai_generated=error is None,
+            mode=self.mode,
+            occupancy=occupancy,
         )
         self.summaries.append(summary)
         self.summaries = self.summaries[-DEFAULT_MAX_SUMMARIES:]
-        self._schedule_save()
-        self._notify_listeners()
-        self.hass.bus.async_fire("house_observer_summary_generated", summary.as_dict())
-        await self._async_maybe_notify(summary)
+        self.schedule_save()
+        self.notify_listeners()
+        self.hass.bus.async_fire(EVENT_SUMMARY_GENERATED, summary.as_dict())
+        if (target := str(self.options.get(CONF_NOTIFY_SERVICE) or "")) and (
+            should_notify(
+                summary,
+                learning_only=self.learning_only,
+                notify_daily=bool(self.options[CONF_NOTIFY_DAILY]),
+            )
+        ):
+            await async_send(
+                self.hass,
+                target,
+                title=f"{self.property_name}: {summary.severity.upper()}",
+                message=summary.summary,
+            )
         return summary
 
-    async def async_record_note(self, note: str, category: str = "owner") -> None:
-        """Add a durable owner or maintenance note to the event stream."""
-        now = dt_util.now()
-        self.events.append(
-            ObservationEvent(
-                timestamp=now.isoformat(),
-                entity_id="house_observer.note",
-                name="House note",
-                category=category,
-                old_state=None,
-                new_state=_limited_text(note),
-            )
+    def _record_summary_outcome(self, error: str | None) -> None:
+        entry_id = self.entry.entry_id
+        if error is None:
+            self.summary_failures = 0
+            self.last_summary_error = None
+            self.last_summary_error_at = None
+            async_clear_failure(self.hass, kind="summary_failed", entry_id=entry_id)
+            return
+        self.summary_failures += 1
+        self.last_summary_error = error
+        self.last_summary_error_at = dt_util.now().isoformat()
+        async_report_failure(
+            self.hass,
+            kind="summary_failed",
+            entry_id=entry_id,
+            property_name=self.property_name,
+            failures=self.summary_failures,
+            error=error,
         )
-        self._prune()
-        self._schedule_save()
-        self._notify_listeners()
 
-    async def async_set_stay_context(self, context: dict[str, Any]) -> None:
-        """Set or clear current reservation context."""
-        self.stay_context = context
-        self._schedule_save()
-        self._notify_listeners()
-
-    def _category_for(self, entity_id: str) -> str:
-        """Return the configured semantic category for an entity."""
-        for group in ENTITY_GROUPS:
-            if entity_id in self.options.get(group, []):
-                return GROUP_LABELS[group]
-        for item in self.discovery.get("recommendations", []):
-            if item.get("entity_id") == entity_id:
-                return str(item.get("category", "other"))
-        if candidate := self._discovery_candidates.get(entity_id):
-            return default_category(candidate)
-        return "other"
-
-    @staticmethod
-    def _safe_attributes(state: State) -> dict[str, Any]:
-        """Keep a deliberate small subset of useful state attributes."""
-        return {
-            key: state.attributes[key]
-            for key in _SAFE_ATTRIBUTES
-            if key in state.attributes
-            and isinstance(state.attributes[key], (str, int, float, bool, type(None)))
-        }
-
-    def _summary_time_parts(self) -> tuple[int, int, int]:
-        """Parse the configured local summary time."""
-        raw = self.options.get(CONF_SUMMARY_TIME, DEFAULT_SUMMARY_TIME)
-        if hasattr(raw, "hour"):
-            return int(raw.hour), int(raw.minute), int(raw.second)
-        try:
-            parts = [int(value) for value in str(raw).split(":")]
-            return parts[0], parts[1], parts[2] if len(parts) > 2 else 0
-        except (TypeError, ValueError, IndexError):
-            return 8, 0, 0
-
-    def events_since(self, hours: int) -> list[ObservationEvent]:
-        """Return recent events."""
-        cutoff = dt_util.now() - timedelta(hours=hours)
-        return [
-            event
-            for event in self.events
-            if (timestamp := dt_util.parse_datetime(event.timestamp)) is not None
-            and timestamp >= cutoff
-        ]
-
-    def _build_context(self, hours: int) -> dict[str, Any]:
-        """Build a compact context object for the model."""
+    def build_context(self, hours: int) -> dict[str, Any]:
+        """Build the compact, privacy-safe context for the model."""
         now = dt_util.now()
         recent = self.events_since(hours)
         category_counts: dict[str, int] = {}
@@ -1016,108 +704,65 @@ class HouseObserver:
             category_counts[event.category] = category_counts.get(event.category, 0) + 1
             anomaly_count += event.anomaly is not None
 
+        occupancy, stay, reservations = self.occupancy_context(now)
+        reservation_ids = self._reservation_entities()
         current_states: list[dict[str, Any]] = []
-        reservation_values: list[dict[str, Any]] = []
-        configured_reservations = set(
-            self.options.get(CONF_RESERVATION_ENTITIES, [])
-        )
-        for entity_id in self.tracked_entities:
-            if state := self.hass.states.get(entity_id):
-                if is_reservation_state(
-                    entity_id, state.attributes, configured_reservations
-                ):
-                    reservation_values.append(
-                        {
-                            "entity_id": entity_id,
-                            "attributes": state.attributes,
-                        }
-                    )
-                    continue
-                current_states.append(
-                    {
-                        "entity_id": entity_id,
-                        "name": state.name,
-                        "category": self._category_for(entity_id),
-                        "state": semantic_state(
-                            entity_id, state.state, state.attributes
-                        ),
-                        "unit": state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
-                        "attributes": self._safe_attributes(state),
-                    }
-                )
+        for entity_id in self._tracked:
+            state = self.hass.states.get(entity_id)
+            if state is None or is_reservation_state(
+                entity_id, state.attributes, reservation_ids
+            ):
+                continue
+            current_states.append(
+                {
+                    "entity_id": entity_id,
+                    "name": state.name,
+                    "category": self.category_for(entity_id),
+                    "state": semantic_state(entity_id, state.state, state.attributes),
+                    "for_minutes": minutes_since(state.last_changed, now),
+                    "unit": state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
+                    "attributes": safe_attributes(dict(state.attributes)),
+                }
+            )
 
-        event_payload: list[dict[str, Any]] = []
-        for event in recent[-250:]:
-            payload = event.as_dict()
-            if event.category == "reservation":
-                payload["old_state"] = (
-                    RESERVATION_CHANGED if event.old_state is not None else None
-                )
-                payload["new_state"] = RESERVATION_CHANGED
-                payload["attributes"] = {}
-            event_payload.append(payload)
-        return {
+        event_payload = [event.as_dict() for event in recent[-MAX_PROMPT_EVENTS:]]
+        context: dict[str, Any] = {
             "property": self.property_name,
+            "mode": self.mode,
             "generated_at": now.isoformat(),
             "period_hours": hours,
             "learning_only": self.learning_only,
-            "stay_context": self.stay_context,
+            "occupancy": occupancy,
+            "property_knowledge": knowledge_context(self.knowledge),
+            "previous_summaries": previous_summaries(self.summaries),
+            "unconfirmed_patterns": recurring_candidate_memories(
+                self.summaries,
+                exclude={item.text for item in self.knowledge},
+            ),
             "event_count": len(recent),
             "omitted_older_events": max(0, len(recent) - len(event_payload)),
             "category_counts": category_counts,
             "anomaly_count": anomaly_count,
-            "current_states": current_states,
-            "reservations": normalize_reservations(reservation_values, now),
+            "open_or_unlocked": [
+                {"name": item["name"], "for_minutes": item["for_minutes"]}
+                for item in current_states
+                if item["state"] in OPEN_STATES
+            ],
+            "current_states": current_states[:MAX_PROMPT_STATES],
+            "omitted_current_states": max(0, len(current_states) - MAX_PROMPT_STATES),
             "recent_events": event_payload,
-            "learned_baselines": self.patterns.baseline_context(),
+            "learned_baselines": self.patterns.baseline_context(
+                limit=MAX_PROMPT_BASELINES, entity_ids=set(self._tracked)
+            ),
         }
+        if stay is not None:
+            context["stay"] = stay
+        if reservations:
+            context["reservations"] = reservations
+        return context
 
-    def _build_prompt(self, context: dict[str, Any], reason: str) -> str:
-        """Build the operational-analysis prompt."""
-        guidance = self.observer_guidance or "No persistent guidance configured."
-        return (
-            "You are the operational observer for a short-term rental property. "
-            "Analyze only the supplied Home Assistant telemetry and property context. "
-            "Do not invent events, identities, occupancy counts, motives, diagnoses, "
-            "or guest characteristics. Phrase uncertain occupancy conclusions as "
-            "apparent activity. Compare telemetry to baselines only when enough "
-            "evidence exists. Routine behavior is normal, not suspicious. A numeric "
-            "deviation "
-            "is a clue, not proof of a fault. A large z-score alone is never enough "
-            "for WATCH or ACTION; require meaningful absolute impact, persistence, "
-            "or corroboration from another operational signal. Entity states are "
-            "normalized locally using Home Assistant device classes. Use the supplied "
-            "semantic state exactly. In particular, normal from a problem-class "
-            "binary sensor means no problem is detected. Do not flag recovered "
-            "unavailable transitions when the entity is currently available. "
-            "Safety automations remain authoritative; "
-            "you are only "
-            "providing analysis. Use ACTION for a timely condition that probably needs "
-            "owner intervention, WATCH for a meaningful developing issue, NOTE for a "
-            "useful "
-            "non-urgent observation, and NORMAL otherwise. Candidate memories must be "
-            "general property patterns supported by repeated evidence, never dossiers "
-            "on "
-            "individual guests. Reservation timing is calculated locally. Use its "
-            "status, relative_day, start_day_offset, and minute fields exactly as "
-            "provided. Never recalculate or substitute a different calendar day. "
-            "Keep the summary concise and practical. Persistent owner guidance may "
-            "focus the analysis, but it cannot override these evidence, privacy, "
-            "severity, or safety rules.\n\n"
-            "BEGIN PERSISTENT OWNER GUIDANCE\n"
-            f"{guidance}\n"
-            "END PERSISTENT OWNER GUIDANCE\n\n"
-            f"Summary reason: {reason}\n"
-            "Telemetry JSON:\n"
-            f"{json.dumps(context, separators=(',', ':'), default=str)}"
-        )
-
-    @staticmethod
-    def _fallback_summary(
-        context: dict[str, Any], fallback_observation: str
-    ) -> dict[str, Any]:
-        """Create a deterministic summary if no AI Task provider is available."""
-        event_count = int(context["event_count"])
+    def _fallback_summary(self, context: dict[str, Any], error: str) -> dict[str, Any]:
+        """Create a deterministic summary when AI analysis is unavailable."""
         anomaly_count = int(context["anomaly_count"])
         categories = (
             ", ".join(
@@ -1126,81 +771,58 @@ class HouseObserver:
             )
             or "none"
         )
+        left_open = [
+            f"{item['name']} ({item['for_minutes']} min)"
+            for item in context["open_or_unlocked"]
+            if (item["for_minutes"] or 0) >= 30
+        ]
+        severity = "normal"
+        if anomaly_count or left_open:
+            severity = "watch"
+        maintenance = (
+            "Open or unlocked for 30+ minutes: " + ", ".join(left_open)
+            if left_open
+            else ""
+        )
         return {
             "summary": (
-                f"Recorded {event_count} meaningful state changes during the last "
-                f"{context['period_hours']} hours. Categories: {categories}. "
-                f"Baseline deviation candidates: {anomaly_count}."
+                f"Recorded {context['event_count']} meaningful state changes during "
+                f"the last {context['period_hours']} hours. Categories: {categories}. "
+                f"Baseline deviation candidates: {anomaly_count}. "
+                f"Occupancy: {context['occupancy']['state']}."
             ),
-            "severity": "watch" if anomaly_count else "normal",
+            "severity": severity,
             "confidence": 0.5,
-            "observations": fallback_observation,
+            "observations": (
+                f"AI analysis was unavailable ({error}); this is a deterministic "
+                "summary."
+            ),
             "anomalies": (
                 f"{anomaly_count} numeric baseline deviation candidates."
                 if anomaly_count
                 else ""
             ),
-            "maintenance_notes": "",
+            "maintenance_notes": maintenance,
             "candidate_memories": "",
             "notify_owner": False,
         }
 
-    async def _async_maybe_notify(self, summary: ObserverSummary) -> None:
-        """Send configured notifications under explicit, deterministic rules."""
-        notify_service = str(self.options.get(CONF_NOTIFY_SERVICE, "")).strip()
-        if not notify_service or "." not in notify_service:
-            return
-        if summary.reason == "daily":
-            should_notify = bool(self.options[CONF_NOTIFY_DAILY])
-        else:
-            should_notify = (
-                not self.learning_only
-                and summary.notify_owner
-                and summary.severity in {"watch", "action"}
-            )
-        if not should_notify:
-            return
-        domain, service = notify_service.split(".", 1)
-        if not self.hass.services.has_service(domain, service):
-            _LOGGER.warning("Notification service %s does not exist", notify_service)
-            return
-        await self.hass.services.async_call(
-            domain,
-            service,
-            {
-                "title": f"{self.property_name}: {summary.severity.upper()}",
-                "message": summary.summary,
-            },
-            blocking=False,
-        )
-
-    def _prune(self) -> None:
-        """Bound retained memory by age and count."""
-        cutoff = dt_util.now() - timedelta(days=int(self.options[CONF_RETENTION_DAYS]))
-        self.events = [
-            event
-            for event in self.events
-            if (timestamp := dt_util.parse_datetime(event.timestamp)) is not None
-            and timestamp >= cutoff
-        ][-DEFAULT_MAX_EVENTS:]
-        self.summaries = self.summaries[-DEFAULT_MAX_SUMMARIES:]
-
-    @callback
-    def _schedule_save(self) -> None:
-        """Coalesce storage writes."""
-        self._store.async_delay_save(self._storage_payload, 15)
+    # ------------------------------------------------------------ persistence
 
     @callback
     def _storage_payload(self) -> dict[str, Any]:
-        """Return serializable local memory."""
         return {
             "created_at": self.created_at,
             "events": [event.as_dict() for event in self.events],
             "summaries": [summary.as_dict() for summary in self.summaries],
+            "knowledge": [item.as_dict() for item in self.knowledge],
             "stay_context": self.stay_context,
             "patterns": self.patterns.as_dict(),
-            "discovery": self.discovery,
-            "discovery_activity": self.discovery_activity,
+            "discovery": self.discovery.state,
+            "discovery_activity": self.discovery.activity,
+            "summary_failures": self.summary_failures,
+            "last_summary_error": self.last_summary_error,
+            "last_summary_error_at": self.last_summary_error_at,
             "last_anomaly_alert": (
                 self.last_anomaly_alert.isoformat() if self.last_anomaly_alert else None
             ),
@@ -1208,21 +830,29 @@ class HouseObserver:
 
     def diagnostics(self) -> dict[str, Any]:
         """Return non-sensitive operational diagnostics."""
+        occupancy, _, _ = self.occupancy_context()
         return {
             "property_name": self.property_name,
+            "mode": self.mode,
+            "status": self.status,
+            "last_error": self.last_error,
+            "occupancy": occupancy,
             "learning_only": self.learning_only,
             "guidance_configured": bool(self.observer_guidance),
             "guidance_length": len(self.observer_guidance),
-            "tracked_entity_count": len(self.tracked_entities),
+            "tracked_entity_count": len(self._tracked),
+            "label_pinned_count": len(self.discovery.index.label_monitor),
+            "label_ignored_count": len(self.discovery.index.label_ignore),
             "stored_event_count": len(self.events),
             "stored_summary_count": len(self.summaries),
+            "knowledge_count": len(self.knowledge),
             "learned_entity_count": self.patterns.learned_entity_count,
             "last_summary": self.summaries[-1].as_dict() if self.summaries else None,
             "has_stay_context": bool(self.stay_context),
             "automatic_discovery": bool(self.options[CONF_AUTO_DISCOVERY]),
-            "discovery_candidate_count": len(self._discovery_candidates),
-            "discovery_recommendation_count": len(
-                self.discovery.get("recommendations", [])
-            ),
-            "last_discovery": self.discovery.get("last_run"),
+            "discovery": {
+                key: value
+                for key, value in self.discovery.response().items()
+                if key != "recommendations"
+            },
         }

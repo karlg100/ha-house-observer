@@ -1,58 +1,49 @@
-"""Load pure integration modules without importing Home Assistant."""
+"""Load pure integration modules without importing Home Assistant.
+
+Modules are imported through a synthetic package that points at the component
+directory, so relative imports work but the integration's __init__.py (which
+needs Home Assistant) never runs.
+"""
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import sys
+import types
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).parents[1]
 COMPONENT = ROOT / "custom_components" / "house_observer"
+PURE_PACKAGE = "house_observer_pure"
 
 
-def _load_module(name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(name, COMPONENT / filename)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load {filename}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
+def _load_module(filename: str):
+    """Import a pure component module by file name."""
+    if PURE_PACKAGE not in sys.modules:
+        package = types.ModuleType(PURE_PACKAGE)
+        package.__path__ = [str(COMPONENT)]
+        sys.modules[PURE_PACKAGE] = package
+    return importlib.import_module(f"{PURE_PACKAGE}.{Path(filename).stem}")
+
+
+def _fixture(filename: str):
+    @pytest.fixture(scope="session")
+    def module():
+        return _load_module(filename)
+
     return module
 
 
-@pytest.fixture(scope="session")
-def patterns_module():
-    """Return the pure baseline module."""
-    return _load_module("house_observer_patterns", "patterns.py")
-
-
-@pytest.fixture(scope="session")
-def models_module():
-    """Return the pure storage models module."""
-    return _load_module("house_observer_models", "models.py")
-
-
-@pytest.fixture(scope="session")
-def discovery_module():
-    """Return the pure automatic-discovery module."""
-    return _load_module("house_observer_discovery", "discovery.py")
-
-
-@pytest.fixture(scope="session")
-def reservations_module():
-    """Return the pure reservation-normalization module."""
-    return _load_module("house_observer_reservations", "reservations.py")
-
-
-@pytest.fixture(scope="session")
-def semantics_module():
-    """Return the pure entity-semantics module."""
-    return _load_module("house_observer_semantics", "semantics.py")
-
-
-@pytest.fixture(scope="session")
-def guidance_module():
-    """Return the pure persistent-guidance module."""
-    return _load_module("house_observer_guidance", "guidance.py")
+patterns_module = _fixture("patterns.py")
+models_module = _fixture("models.py")
+discovery_module = _fixture("discovery.py")
+reservations_module = _fixture("reservations.py")
+semantics_module = _fixture("semantics.py")
+guidance_module = _fixture("guidance.py")
+knowledge_module = _fixture("knowledge.py")
+occupancy_module = _fixture("occupancy.py")
+prompts_module = _fixture("prompts.py")
+ingest_module = _fixture("ingest.py")
+selection_module = _fixture("selection.py")

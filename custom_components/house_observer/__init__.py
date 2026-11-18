@@ -6,6 +6,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -22,21 +23,34 @@ from .const import (
     ATTR_CHECK_OUT,
     ATTR_CLEAR,
     ATTR_CONFIG_ENTRY_ID,
+    ATTR_EXPIRES_IN_DAYS,
     ATTR_GUEST_COUNT,
     ATTR_HOURS,
     ATTR_LABEL,
     ATTR_NOTE,
+    ATTR_NOTE_ID,
     ATTR_PET_COUNT,
     ATTR_RESERVATION_ID,
+    CONF_ALWAYS_MONITOR_ENTITIES,
+    CONF_MODE,
+    CONF_RESERVATION_ENTITIES,
+    DATA_CATEGORY_OVERRIDES,
     DEFAULT_LOOKBACK_HOURS,
     DOMAIN,
-    PLATFORMS,
+    LEGACY_GROUP_CATEGORIES,
+    MODE_HOME,
+    MODE_RENTAL,
+    NOTE_CATEGORIES,
     SERVICE_DISCOVER_ENTITIES,
+    SERVICE_FORGET_NOTE,
     SERVICE_GENERATE_SUMMARY,
     SERVICE_RECORD_NOTE,
     SERVICE_SET_STAY_CONTEXT,
 )
 from .observer import HouseObserver
+from .repairs import async_clear_all
+
+PLATFORMS = [Platform.SENSOR]
 
 type HouseObserverConfigEntry = ConfigEntry[HouseObserver]
 
@@ -78,15 +92,25 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         )
         return summary.as_dict()
 
-    async def record_note(call: ServiceCall) -> None:
+    async def record_note(call: ServiceCall) -> ServiceResponse:
         manager = _manager_for_call(hass, call)
-        await manager.async_record_note(
-            str(call.data[ATTR_NOTE]), str(call.data.get(ATTR_CATEGORY, "owner"))
+        item = await manager.async_record_note(
+            str(call.data[ATTR_NOTE]),
+            str(call.data.get(ATTR_CATEGORY, "owner")),
+            expires_in_days=call.data.get(ATTR_EXPIRES_IN_DAYS),
         )
+        return item.as_dict()
+
+    async def forget_note(call: ServiceCall) -> ServiceResponse:
+        manager = _manager_for_call(hass, call)
+        note_id = str(call.data[ATTR_NOTE_ID])
+        if not await manager.async_forget_note(note_id):
+            raise ServiceValidationError(f"No House Observer note with ID {note_id}")
+        return {"note_id": note_id, "removed": True}
 
     async def discover_entities(call: ServiceCall) -> ServiceResponse:
         manager = _manager_for_call(hass, call)
-        return await manager.async_discover_entities(reason="manual")
+        return await manager.discovery.async_discover(reason="manual")
 
     async def set_stay_context(call: ServiceCall) -> None:
         manager = _manager_for_call(hass, call)
@@ -137,9 +161,25 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             {
                 vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
                 vol.Required(ATTR_NOTE): cv.string,
-                vol.Optional(ATTR_CATEGORY, default="owner"): cv.string,
+                vol.Optional(ATTR_CATEGORY, default="owner"): vol.In(NOTE_CATEGORIES),
+                vol.Optional(ATTR_EXPIRES_IN_DAYS): vol.All(
+                    vol.Coerce(float), vol.Range(min=0.1, max=3650)
+                ),
             }
         ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_FORGET_NOTE,
+        forget_note,
+        schema=vol.Schema(
+            {
+                vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
+                vol.Required(ATTR_NOTE_ID): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
     )
     hass.services.async_register(
         DOMAIN,
@@ -189,10 +229,50 @@ async def async_unload_entry(
     return unloaded
 
 
+async def async_remove_entry(
+    hass: HomeAssistant, entry: HouseObserverConfigEntry
+) -> None:
+    """Remove Repairs issues left by a deleted property."""
+    async_clear_all(hass, entry.entry_id)
+
+
+def migrate_options(
+    options: dict[str, Any], overrides: dict[str, str]
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Fold 0.2 category pickers into pins plus category overrides."""
+    options = dict(options)
+    overrides = dict(overrides)
+    pins = list(options.get(CONF_ALWAYS_MONITOR_ENTITIES, []))
+    for key, category in LEGACY_GROUP_CATEGORIES.items():
+        for entity_id in options.pop(key, None) or []:
+            overrides.setdefault(entity_id, category)
+            if entity_id not in pins:
+                pins.append(entity_id)
+    if pins:
+        options[CONF_ALWAYS_MONITOR_ENTITIES] = pins
+    # Earlier releases assumed a rental. Keep that for anyone who wired up
+    # booking data; everyone else becomes a home observer.
+    options.setdefault(
+        CONF_MODE,
+        MODE_RENTAL if options.get(CONF_RESERVATION_ENTITIES) else MODE_HOME,
+    )
+    return options, overrides
+
+
 async def async_migrate_entry(
     hass: HomeAssistant, entry: HouseObserverConfigEntry
 ) -> bool:
-    """Migrate config entries across future schema versions."""
-    if entry.version == 1 and entry.minor_version < 1:
-        hass.config_entries.async_update_entry(entry, minor_version=1)
+    """Migrate config entries across schema versions."""
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 2:
+        options, overrides = migrate_options(
+            dict(entry.options), dict(entry.data.get(DATA_CATEGORY_OVERRIDES, {}))
+        )
+        data = dict(entry.data)
+        if overrides:
+            data[DATA_CATEGORY_OVERRIDES] = overrides
+        hass.config_entries.async_update_entry(
+            entry, data=data, options=options, minor_version=2
+        )
     return True

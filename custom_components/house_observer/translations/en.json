@@ -1,172 +1,320 @@
 {
+  "title": "House Observer",
   "config": {
     "abort": {
       "already_configured": "This property is already configured."
     },
     "step": {
-      "behavior": {
+      "user": {
+        "title": "Set up House Observer",
+        "description": "House Observer turns Home Assistant telemetry into local memory, plain-language summaries, and explainable anomaly candidates.",
         "data": {
-          "ai_task_entity": "AI Task entity (optional)",
-          "discovery_interval_hours": "Reevaluate devices every (hours)",
-          "learning_only": "Learning-only mode",
-          "lookback_hours": "Daily summary lookback (hours)",
-          "minimum_baseline_samples": "Minimum samples before anomaly detection",
-          "notify_daily_summary": "Send the daily summary",
-          "notify_service": "Notification action, such as notify.mobile_app_phone (optional)",
-          "observer_guidance": "Persistent observer guidance (optional)",
-          "retention_days": "Event retention (days)",
-          "summary_time": "Daily summary time",
-          "zscore_threshold": "Numeric anomaly sensitivity (standard deviations)"
+          "property_name": "Property name",
+          "observer_mode": "Property type"
         },
         "data_description": {
-          "ai_task_entity": "Choose a configured AI Task provider or leave blank to use Home Assistant's preferred provider.",
-          "discovery_interval_hours": "The Observer collects only change counts between reviews, then asks the AI to reevaluate the useful device and entity set.",
-          "learning_only": "When enabled, observations and summaries are stored but anomaly notifications are suppressed.",
-          "lookback_hours": "How much recent activity is included in each scheduled summary.",
-          "minimum_baseline_samples": "An entity must have this many observations before it can produce a numeric deviation candidate.",
-          "notify_daily_summary": "Requires a notification action below. This setting is independent of anomaly alerts.",
-          "notify_service": "Enter the full Home Assistant action name. Leave blank to keep summaries inside Home Assistant only.",
-          "observer_guidance": "Property-specific priorities included with every AI summary. Edit this text at any time, or clear it to remove the guidance.",
-          "retention_days": "Raw curated observations older than this are discarded. Learned aggregate baselines remain.",
-          "summary_time": "Uses Home Assistant's configured local time zone.",
-          "zscore_threshold": "Higher values create fewer deviation candidates. The default is deliberately conservative."
-        },
-        "description": "Start conservatively. Learning-only mode is recommended until the observer has seen several stays.",
-        "title": "Observer behavior"
+          "property_name": "Used in summaries, notifications, and the observer device name.",
+          "observer_mode": "Home watches for overuse, high water use, and misbehaving equipment. Rental also watches for property misuse while guests stay and for problems to fix while it is empty."
+        }
       },
-      "entities": {
+      "monitoring": {
+        "title": "What to watch",
+        "description": "Leave the pins and ignores blank to let discovery choose. You can also add the Home Assistant labels observer, observer_ignore, or observer_ followed by a category (for example observer_water) to any entity or device.",
         "data": {
+          "auto_discovery": "Automatically discover important entities",
+          "discovery_interval_hours": "Re-review the monitored set every (hours)",
           "always_monitor_devices": "Always monitor these devices",
           "always_monitor_entities": "Always monitor these entities",
-          "auto_discovery": "Automatically discover important devices",
-          "access_entities": "Doors and locks",
-          "activity_entities": "Motion and activity",
-          "energy_entities": "Energy and power",
-          "hvac_entities": "HVAC and room temperature",
-          "network_entities": "Internet and network",
           "never_monitor_devices": "Never monitor these devices",
           "never_monitor_entities": "Never monitor these entities",
-          "occupancy_entities": "Occupancy indicators",
-          "reservation_entities": "Reservation context entities",
-          "spa_entities": "Hot tub and spa"
+          "occupancy_entity": "Occupancy entity (optional)",
+          "reservation_entities": "Reservation calendars or sensors (optional)"
         },
         "data_description": {
-          "always_monitor_devices": "User override: eligible entities from these devices are monitored even if the AI does not recommend them.",
-          "always_monitor_entities": "User override: these individual entities are monitored even if the AI does not recommend them.",
-          "auto_discovery": "Review eligible entities by room and device, learn how often they change, and let the configured AI choose a minimal useful set.",
-          "access_entities": "Door contacts, exterior locks, and related access indicators.",
-          "activity_entities": "Motion, presence, appliance use, or other indicators of household activity.",
-          "energy_entities": "Whole-home and important circuit power sensors, including Emporia entities.",
-          "hvac_entities": "Thermostats, mini-splits, temperature sensors, and HVAC operating states.",
-          "network_entities": "Starlink connectivity, latency, throughput, and router availability.",
-          "never_monitor_devices": "User override: entities belonging to these devices are never monitored. This override always wins.",
-          "never_monitor_entities": "User override: these individual entities are never monitored. This override always wins.",
-          "occupancy_entities": "Non-camera occupancy estimates or presence helpers.",
-          "reservation_entities": "Calendar or helper entities that describe the current stay.",
-          "spa_entities": "Gecko water temperature, setpoint, heater, pump, filter, ozone, and spa power entities."
-        },
-        "description": "Leave the manual categories blank to let automatic discovery choose. Always and never overrides take precedence over AI recommendations.",
-        "title": "Choose entities"
+          "auto_discovery": "Inventory eligible entities by area and let the AI provider choose a small useful set. Pins and ignores below, and the observer labels, are always applied on top.",
+          "discovery_interval_hours": "Between reviews only change counts are collected. New installs are also reviewed after 1, 3, and 7 days.",
+          "always_monitor_devices": "Every useful entity on these devices is monitored, whatever discovery decides.",
+          "always_monitor_entities": "These entities are monitored whatever discovery decides.",
+          "never_monitor_devices": "Nothing from these devices is monitored. Ignores always win.",
+          "never_monitor_entities": "These entities are never monitored. Ignores always win.",
+          "occupancy_entity": "A helper, binary sensor, zone, or counter that says whether the property is occupied (for example input_boolean.guest_mode or zone.home). It takes priority over stays and calendars.",
+          "reservation_entities": "Calendars or sensors with booking start and end times. Only timing is used; guest names and booking IDs never reach the AI provider."
+        }
       },
-      "user": {
+      "analysis": {
+        "title": "Summaries",
         "data": {
-          "property_name": "Property name"
+          "ai_task_entity": "AI Task entity (optional)",
+          "observer_guidance": "Persistent observer guidance (optional)",
+          "summary_time": "Daily summary time",
+          "lookback_hours": "Daily summary lookback (hours)"
         },
         "data_description": {
-          "property_name": "The name used in summaries, notifications, and the observer device."
+          "ai_task_entity": "Choose an AI Task provider, or leave blank to use Home Assistant's preferred one.",
+          "observer_guidance": "Property-specific priorities included with every AI summary. Clear it to remove the guidance.",
+          "summary_time": "Uses Home Assistant's configured time zone.",
+          "lookback_hours": "How much recent activity each scheduled summary reviews."
+        }
+      },
+      "alerts": {
+        "title": "Alerts",
+        "description": "Start in learning-only mode until the observer has seen typical use.",
+        "data": {
+          "learning_only": "Learning-only mode",
+          "notify_service": "Notification target (optional)",
+          "notify_daily_summary": "Send the daily summary"
         },
-        "description": "House Observer turns selected Home Assistant telemetry into bounded local memory, operational summaries, and explainable anomaly candidates.",
-        "title": "Set up House Observer"
-      }
-    }
-  },
-  "entity": {
-    "sensor": {
-      "active_stay": {
-        "name": "Active stay"
-      },
-      "anomalies_24h": {
-        "name": "Anomalies in 24 hours"
-      },
-      "events_24h": {
-        "name": "Events in 24 hours"
-      },
-      "last_summary": {
-        "name": "Last summary"
-      },
-      "learned_baselines": {
-        "name": "Learned baselines"
-      },
-      "discovered_devices": {
-        "name": "Discovered devices"
-      },
-      "status": {
-        "name": "Status"
+        "data_description": {
+          "learning_only": "Observations and summaries are still recorded, but anomaly alerts are not sent. Recommended until baselines have formed.",
+          "notify_service": "A notify entity or action, such as notify.mobile_app_phone. Leave blank to keep summaries inside Home Assistant.",
+          "notify_daily_summary": "Independent of anomaly alerts and learning-only mode."
+        }
       }
     }
   },
   "options": {
     "step": {
       "init": {
+        "title": "House Observer settings",
+        "menu_options": {
+          "monitoring": "What to watch",
+          "analysis": "Summaries and property type",
+          "alerts": "Alerts",
+          "learning": "Learning and retention"
+        }
+      },
+      "monitoring": {
+        "title": "What to watch",
+        "description": "Pins and ignores apply on top of discovery. The labels observer, observer_ignore, and observer_ followed by a category (for example observer_water) work too.",
         "data": {
-          "access_entities": "Doors and locks",
-          "activity_entities": "Motion and activity",
-          "ai_task_entity": "AI Task entity (optional)",
+          "auto_discovery": "Automatically discover important entities",
+          "discovery_interval_hours": "Re-review the monitored set every (hours)",
           "always_monitor_devices": "Always monitor these devices",
           "always_monitor_entities": "Always monitor these entities",
-          "auto_discovery": "Automatically discover important devices",
-          "discovery_interval_hours": "Reevaluate devices every (hours)",
-          "energy_entities": "Energy and power",
-          "hvac_entities": "HVAC and room temperature",
-          "learning_only": "Learning-only mode",
-          "lookback_hours": "Daily summary lookback (hours)",
-          "minimum_baseline_samples": "Minimum samples before anomaly detection",
-          "network_entities": "Internet and network",
           "never_monitor_devices": "Never monitor these devices",
           "never_monitor_entities": "Never monitor these entities",
-          "notify_daily_summary": "Send the daily summary",
-          "notify_service": "Notification action (optional)",
-          "observer_guidance": "Persistent observer guidance (optional)",
-          "occupancy_entities": "Occupancy indicators",
-          "reservation_entities": "Reservation context entities",
-          "retention_days": "Event retention (days)",
-          "spa_entities": "Hot tub and spa",
-          "summary_time": "Daily summary time",
-          "zscore_threshold": "Numeric anomaly sensitivity"
+          "occupancy_entity": "Occupancy entity (optional)",
+          "reservation_entities": "Reservation calendars or sensors (optional)"
         },
         "data_description": {
-          "always_monitor_devices": "User override: eligible entities from these devices are always monitored.",
-          "always_monitor_entities": "User override: these entities are always monitored.",
-          "auto_discovery": "When enabled, AI recommendations are reevaluated on the configured interval.",
-          "discovery_interval_hours": "Change counts are kept locally between reviews. The default is once per week.",
-          "learning_only": "Disable only after reviewing several summaries and learned behavior.",
-          "never_monitor_devices": "User override: entities belonging to these devices are never monitored. This always wins.",
-          "never_monitor_entities": "User override: these entities are never monitored. This always wins.",
-          "notify_service": "Use a full action name such as notify.mobile_app_phone.",
-          "observer_guidance": "This guidance is included with every AI summary. Edit it here or clear the field to remove it."
+          "auto_discovery": "Inventory eligible entities by area and let the AI provider choose a small useful set. Pins and ignores below, and the observer labels, are always applied on top.",
+          "discovery_interval_hours": "Between reviews only change counts are collected. New installs are also reviewed after 1, 3, and 7 days.",
+          "always_monitor_devices": "Every useful entity on these devices is monitored, whatever discovery decides.",
+          "always_monitor_entities": "These entities are monitored whatever discovery decides.",
+          "never_monitor_devices": "Nothing from these devices is monitored. Ignores always win.",
+          "never_monitor_entities": "These entities are never monitored. Ignores always win.",
+          "occupancy_entity": "A helper, binary sensor, zone, or counter that says whether the property is occupied (for example input_boolean.guest_mode or zone.home). It takes priority over stays and calendars.",
+          "reservation_entities": "Calendars or sensors with booking start and end times. Only timing is used; guest names and booking IDs never reach the AI provider."
+        }
+      },
+      "analysis": {
+        "title": "Summaries and property type",
+        "data": {
+          "observer_mode": "Property type",
+          "ai_task_entity": "AI Task entity (optional)",
+          "observer_guidance": "Persistent observer guidance (optional)",
+          "summary_time": "Daily summary time",
+          "lookback_hours": "Daily summary lookback (hours)"
         },
-        "description": "Changes reload the observer automatically.",
-        "title": "House Observer settings"
+        "data_description": {
+          "observer_mode": "Home watches for overuse, high water use, and misbehaving equipment. Rental also watches for property misuse while guests stay and for problems to fix while it is empty.",
+          "ai_task_entity": "Choose an AI Task provider, or leave blank to use Home Assistant's preferred one.",
+          "observer_guidance": "Property-specific priorities included with every AI summary. Clear it to remove the guidance.",
+          "summary_time": "Uses Home Assistant's configured time zone.",
+          "lookback_hours": "How much recent activity each scheduled summary reviews."
+        }
+      },
+      "alerts": {
+        "title": "Alerts",
+        "data": {
+          "learning_only": "Learning-only mode",
+          "notify_service": "Notification target (optional)",
+          "notify_daily_summary": "Send the daily summary"
+        },
+        "data_description": {
+          "learning_only": "Observations and summaries are still recorded, but anomaly alerts are not sent. Recommended until baselines have formed.",
+          "notify_service": "A notify entity or action, such as notify.mobile_app_phone. Leave blank to keep summaries inside Home Assistant.",
+          "notify_daily_summary": "Independent of anomaly alerts and learning-only mode."
+        }
+      },
+      "learning": {
+        "title": "Learning and retention",
+        "data": {
+          "minimum_baseline_samples": "Minimum samples before anomaly detection",
+          "zscore_threshold": "Numeric anomaly sensitivity (standard deviations)",
+          "retention_days": "Event retention (days)"
+        },
+        "data_description": {
+          "minimum_baseline_samples": "A baseline must contain this many recent readings before it can flag a deviation. Baselines are kept per part of the day and older readings fade over about a month.",
+          "zscore_threshold": "Higher values flag fewer deviations. The default is deliberately conservative.",
+          "retention_days": "Stored observations older than this are discarded. Learned baselines and property notes are kept."
+        }
       }
     }
   },
-  "services": {
-    "discover_entities": {
-      "description": "Inventory eligible entities by area and ask the AI provider to choose a minimal useful monitoring set.",
-      "name": "Discover important devices"
-    },
-    "generate_summary": {
-      "description": "Generate and store an operational summary now.",
-      "name": "Generate summary"
-    },
-    "record_note": {
-      "description": "Add an owner or maintenance note to local observer memory.",
-      "name": "Record note"
-    },
-    "set_stay_context": {
-      "description": "Set or clear reservation context for the current stay.",
-      "name": "Set stay context"
+  "selector": {
+    "observer_mode": {
+      "options": {
+        "home": "Home",
+        "rental": "Short-term rental"
+      }
     }
   },
-  "title": "House Observer"
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "learning": "Learning",
+          "active": "Active",
+          "error": "Error"
+        }
+      },
+      "condition": {
+        "name": "Condition",
+        "state": {
+          "normal": "Normal",
+          "note": "Note",
+          "watch": "Watch",
+          "action": "Action"
+        }
+      },
+      "active_stay": {
+        "name": "Occupancy",
+        "state": {
+          "occupied": "Occupied",
+          "vacant": "Vacant",
+          "unknown": "Unknown"
+        }
+      },
+      "events_24h": {
+        "name": "Events in 24 hours"
+      },
+      "anomalies_24h": {
+        "name": "Anomalies in 24 hours"
+      },
+      "learned_baselines": {
+        "name": "Learned baselines"
+      },
+      "discovered_devices": {
+        "name": "Monitored entities"
+      },
+      "last_summary": {
+        "name": "Last summary"
+      },
+      "property_notes": {
+        "name": "Property notes"
+      }
+    }
+  },
+  "issues": {
+    "discovery_failed": {
+      "title": "House Observer cannot discover entities for {property}",
+      "description": "Automatic entity discovery has failed {failures} times in a row, so {property} is using a conservative fallback selection.\n\nLast error: {error}\n\nCheck that an AI Task provider is configured and working. This message clears after the next successful discovery."
+    },
+    "summary_failed": {
+      "title": "House Observer summaries are failing for {property}",
+      "description": "AI summaries for {property} have failed {failures} times in a row, so only deterministic summaries are being produced.\n\nLast error: {error}\n\nCheck that an AI Task provider is configured and working. This message clears after the next successful summary."
+    }
+  },
+  "services": {
+    "generate_summary": {
+      "name": "Generate summary",
+      "description": "Generate and store an operational summary now.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Property",
+          "description": "Required only when several properties are configured."
+        },
+        "hours": {
+          "name": "Hours",
+          "description": "How many hours of activity to review."
+        }
+      }
+    },
+    "discover_entities": {
+      "name": "Discover important entities",
+      "description": "Inventory eligible entities by area and ask the AI provider to choose a small useful monitoring set.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Property",
+          "description": "Required only when several properties are configured."
+        }
+      }
+    },
+    "record_note": {
+      "name": "Record note",
+      "description": "Save a note or confirmed pattern that every future summary will consider.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Property",
+          "description": "Required only when several properties are configured."
+        },
+        "note": {
+          "name": "Note",
+          "description": "What the observer should know, such as a repair or a normal pattern."
+        },
+        "category": {
+          "name": "Category",
+          "description": "Use property_pattern to confirm a candidate memory from a summary."
+        },
+        "expires_in_days": {
+          "name": "Expires in days",
+          "description": "Optional. Forget the note after this many days."
+        }
+      }
+    },
+    "forget_note": {
+      "name": "Forget note",
+      "description": "Remove a saved note by its ID (shown on the Property notes sensor).",
+      "fields": {
+        "config_entry_id": {
+          "name": "Property",
+          "description": "Required only when several properties are configured."
+        },
+        "note_id": {
+          "name": "Note ID",
+          "description": "The note_id to remove."
+        }
+      }
+    },
+    "set_stay_context": {
+      "name": "Set stay context",
+      "description": "Set or clear the current stay for a rental. It clears itself after check-out.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Property",
+          "description": "Required only when several properties are configured."
+        },
+        "clear": {
+          "name": "Clear",
+          "description": "Remove the current stay."
+        },
+        "reservation_id": {
+          "name": "Reservation ID",
+          "description": "Kept locally for your own automations; never sent to the AI provider."
+        },
+        "label": {
+          "name": "Label",
+          "description": "Kept locally; never sent to the AI provider."
+        },
+        "guest_count": {
+          "name": "Guest count",
+          "description": "Booked guests, used to judge typical activity."
+        },
+        "pet_count": {
+          "name": "Pet count",
+          "description": "Booked pets."
+        },
+        "check_in": {
+          "name": "Check-in",
+          "description": "Stay start."
+        },
+        "check_out": {
+          "name": "Check-out",
+          "description": "Stay end. The stay is cleared after this time."
+        }
+      }
+    }
+  }
 }
