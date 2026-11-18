@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime
 from typing import Any
 
@@ -44,6 +45,83 @@ def safe_reservation_attributes(attributes: dict[str, Any]) -> dict[str, str]:
             continue
         safe[key] = parsed.isoformat()
     return safe
+
+
+_COUNT_KEYS = {
+    "adults": "adults",
+    "children": "children",
+    "infants": "infants",
+    "pets": "pets",
+    "guests": "guest_count",
+    "guest_count": "guest_count",
+    "number_of_guests": "guest_count",
+    "num_guests": "guest_count",
+}
+# Only labeled booking lines are read ("Party: 4 adults and 2 children",
+# "Guests: 6"), never free-text guest comments.
+_PARTY_LINE = re.compile(
+    r"^\s*(party|guests?|occupants?|adults?|children|pets?)\s*[:=]\s*(.+)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_COUNT = re.compile(
+    r"(\d{1,2})\s*(adults?|children|child|kids?|infants?|bab(?:y|ies)|pets?|dogs?|"
+    r"guests?|people|persons?)",
+    re.IGNORECASE,
+)
+_WORD_KIND = {
+    "adult": "adults",
+    "child": "children",
+    "kid": "children",
+    "infant": "infants",
+    "bab": "infants",
+    "pet": "pets",
+    "dog": "pets",
+    "guest": "guest_count",
+    "people": "guest_count",
+    "person": "guest_count",
+}
+
+
+def _kind(word: str) -> str | None:
+    word = word.lower()
+    return next(
+        (kind for prefix, kind in _WORD_KIND.items() if word.startswith(prefix)), None
+    )
+
+
+def party_counts(attributes: dict[str, Any]) -> dict[str, int]:
+    """Extract booked party size as numbers only, never names or notes."""
+    counts: dict[str, int] = {}
+    for key, target in _COUNT_KEYS.items():
+        value = attributes.get(key)
+        if isinstance(value, (int, float)) or (
+            isinstance(value, str) and value.strip().isdigit()
+        ):
+            counts[target] = int(float(value))
+
+    lines: list[tuple[str, str]] = []
+    if isinstance(party := attributes.get("party"), str):
+        lines.append(("party", party))
+    for field in ("description", "ical_description", "message"):
+        text = attributes.get(field)
+        if isinstance(text, str):
+            lines.extend(
+                (match.group(1), match.group(2)) for match in _PARTY_LINE.finditer(text)
+            )
+    for label, text in lines:
+        found = False
+        for number, word in _COUNT.findall(text):
+            if (kind := _kind(word)) is not None:
+                counts.setdefault(kind, int(number))
+                found = True
+        if not found and text.strip().isdigit() and (kind := _kind(label)):
+            counts.setdefault(
+                kind if label.lower() != "party" else "guest_count", int(text)
+            )
+
+    if "guest_count" not in counts and ("adults" in counts or "children" in counts):
+        counts["guest_count"] = counts.get("adults", 0) + counts.get("children", 0)
+    return counts
 
 
 def _relative_day(start: datetime, now: datetime) -> tuple[int, str]:
@@ -92,6 +170,7 @@ def normalize_reservations(
         }
         if end is not None:
             item["end_local"] = end.isoformat()
+        item.update(party_counts(attributes))
         if status == "upcoming":
             item["starts_in_minutes"] = max(0, math.ceil(seconds_until_start / 60))
         else:

@@ -20,6 +20,10 @@ Each property runs in one of two modes:
   activity, or use far beyond typical stays. While the house is empty it looks
   for anything that needs fixing before the next arrival, such as an open door,
   window, garage, or hot tub cover, water flow, or equipment left running.
+  While guests stay, the summary also estimates how many people appear to be
+  present, as a range with its evidence, whenever the telemetry supports one.
+  When the booking lists a party size ("Party: 4 adults and 2 children"), the
+  numbers are passed along for reference.
 
 > [!IMPORTANT]
 > House Observer is an analyst, not a safety controller. Keep deterministic Home
@@ -316,8 +320,8 @@ Anomaly notifications require all of the following:
 - Event history, baselines, and notes stay in the Home Assistant instance.
 - Only the monitored set retains state transitions, with a small allowlist of
   attributes.
-- Booking data is reduced to locally calculated timing and guest and pet
-  counts. Guest names, booking IDs, labels, contact details, access codes, and
+- Booking data is reduced to locally calculated timing and party-size
+  numbers (adults, children, infants, pets) read only from labeled party lines. Guest names, booking IDs, labels, contact details, access codes, and
   calendar URLs never reach the AI provider or the retained events.
 - Event retention defaults to 45 days and 5,000 events. Baselines and notes
   survive pruning.

@@ -254,6 +254,7 @@ class ObserverSummarySensor(ObserverSensorBase):
             "anomalies",
             "maintenance_notes",
             "candidate_memories",
+            "occupancy_estimate",
         }
     )
 
@@ -286,6 +287,7 @@ class ObserverSummarySensor(ObserverSensorBase):
             "ai_generated": summary.ai_generated,
             "analysis_path": summary.analysis_path,
             "reply_compacted": summary.reply_compacted,
+            "occupancy_estimate": summary.occupancy_estimate,
         }
 
 

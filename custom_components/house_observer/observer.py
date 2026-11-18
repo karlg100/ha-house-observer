@@ -742,6 +742,11 @@ class HouseObserver:
             anomalies=_limited_text(result.get("anomalies", "")),
             maintenance_notes=_limited_text(result.get("maintenance_notes", "")),
             candidate_memories=_limited_text(result.get("candidate_memories", "")),
+            occupancy_estimate=(
+                _limited_text(result.get("occupancy_estimate", ""), 600)
+                if self.mode == MODE_RENTAL
+                else ""
+            ),
             notify_owner=_as_bool(result.get("notify_owner", False)),
             ai_generated=error is None,
             mode=self.mode,

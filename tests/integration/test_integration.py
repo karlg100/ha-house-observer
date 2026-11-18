@@ -350,3 +350,45 @@ async def test_registry_churn_does_not_trigger_hourly_discovery(
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(hours=2))
     await hass.async_block_till_done()
     assert len(fake_ai.calls) == calls
+
+
+async def test_rental_summary_reports_guest_estimate(
+    hass: HomeAssistant, fake_ai: Any
+) -> None:
+    hass.states.async_set(
+        "sensor.booking",
+        "Booking",
+        {
+            "start": (dt_util.now() - timedelta(hours=3)).isoformat(),
+            "end": (dt_util.now() + timedelta(days=2)).isoformat(),
+            "party": "4 adults and 2 children",
+            "name": "Jane Smith",
+        },
+    )
+    entry = await _setup(
+        hass,
+        {
+            "observer_mode": "rental",
+            "auto_discovery": False,
+            "reservation_entities": ["sensor.booking"],
+        },
+    )
+    fake_ai.summary["occupancy_estimate"] = "About 5-7 people (3 areas busy at once)."
+    summary = await entry.runtime_data.async_generate_summary()
+    prompt = fake_ai.last_instructions
+    assert '"guest_count":6' in prompt
+    assert "Jane" not in prompt
+    assert "occupancy_estimate" in prompt
+    assert summary.occupancy_estimate.startswith("About 5-7 people")
+    attributes = hass.states.get("sensor.test_house_last_summary").attributes
+    assert attributes["occupancy_estimate"].startswith("About 5-7")
+
+
+async def test_home_summary_never_stores_a_guest_estimate(
+    hass: HomeAssistant, fake_ai: Any
+) -> None:
+    entry = await _setup(hass, {"observer_mode": "home", "auto_discovery": False})
+    fake_ai.summary["occupancy_estimate"] = "3 people"
+    summary = await entry.runtime_data.async_generate_summary()
+    assert summary.occupancy_estimate == ""
+    assert "estimate how many people" not in fake_ai.last_instructions

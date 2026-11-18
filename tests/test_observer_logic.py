@@ -369,7 +369,8 @@ def test_prompts_follow_mode_and_occupancy(prompts_module) -> None:
     rental_occupied = prompt("rental", "occupied")
     assert "short-term rental" in rental_occupied
     assert "misuse" in rental_occupied
-    assert "never estimate a head count" in rental_occupied
+    assert "occupancy_estimate" in rental_occupied
+    assert "Never name, identify, or describe individuals" in rental_occupied
 
     rental_vacant = prompt("rental", "vacant")
     assert "hot tub cover open" in rental_vacant
@@ -377,6 +378,7 @@ def test_prompts_follow_mode_and_occupancy(prompts_module) -> None:
 
     home = prompt("home", "occupied")
     assert "short-term rental" not in home
+    assert "estimate how many people" not in home
     assert "water use" in home
     assert "Reservation timing" not in home
 
@@ -457,3 +459,50 @@ def test_registry_rediscovery_is_daily(discovery_module) -> None:
     assert allowed(None, NOW)
     assert not allowed(NOW - timedelta(hours=5), NOW)
     assert allowed(NOW - timedelta(hours=24), NOW)
+
+
+# -------------------------------------------------------------- party sizes
+
+
+@pytest.mark.parametrize(
+    ("attributes", "expected"),
+    [
+        (
+            {"party": "4 adults and 2 children"},
+            {"adults": 4, "children": 2, "guest_count": 6},
+        ),
+        (
+            {"description": "Booking # X\nParty: 2 adults, 1 infant, 1 dog\nNotes"},
+            {"adults": 2, "infants": 1, "pets": 1, "guest_count": 2},
+        ),
+        ({"description": "Guests: 6"}, {"guest_count": 6}),
+        ({"party": "--- NOTES ---", "description": "Party:\n"}, {}),
+        ({"number_of_guests": "5", "pets": 1}, {"guest_count": 5, "pets": 1}),
+        # Free-text guest comments are never read.
+        (
+            {"description": "Party: 2 adults\nComment: we may have 8 people over"},
+            {"adults": 2, "guest_count": 2},
+        ),
+    ],
+)
+def test_party_counts(reservations_module, attributes, expected) -> None:
+    assert reservations_module.party_counts(attributes) == expected
+
+
+def test_reservations_carry_only_counts(reservations_module) -> None:
+    item = reservations_module.normalize_reservations(
+        [
+            {
+                "entity_id": "sensor.booking",
+                "attributes": {
+                    "start": (NOW - timedelta(hours=2)).isoformat(),
+                    "end": (NOW + timedelta(days=2)).isoformat(),
+                    "name": "Jane Smith",
+                    "party": "4 adults and 2 children",
+                },
+            }
+        ],
+        NOW,
+    )[0]
+    assert item["guest_count"] == 6
+    assert "Jane" not in repr(item)
