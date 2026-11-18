@@ -57,6 +57,58 @@ PRIVATE_OR_UNHELPFUL_DOMAINS = {
     "zone",
 }
 
+REGISTRY_REDISCOVERY_MIN_HOURS = 24
+_ENTITY_INDEX_FIELDS = {
+    "area_id",
+    "device_class",
+    "device_id",
+    "disabled_by",
+    "entity_category",
+    "hidden_by",
+    "labels",
+    "name",
+    "original_device_class",
+    "original_name",
+}
+_DEVICE_INDEX_FIELDS = {"area_id", "disabled_by", "labels", "name", "name_by_user"}
+
+
+def registry_change_effect(event_type: str, data: dict[str, Any]) -> tuple[bool, bool]:
+    """Return (reindex, rediscover) for a registry event.
+
+    Only adding, removing, or renaming a useful entity warrants a new AI
+    review. Metadata edits that affect labels, areas, or eligibility only
+    need a cheap local reindex, and anything else (such as a network
+    integration refreshing its client entities) is ignored.
+    """
+    action = data.get("action")
+    if event_type == "entity_registry_updated":
+        entity_id = str(data.get("entity_id", ""))
+        if entity_id.split(".", 1)[0] in PRIVATE_OR_UNHELPFUL_DOMAINS:
+            return False, False
+        if action in {"create", "remove"}:
+            return True, True
+        changes = set(data.get("changes") or {})
+        if "entity_id" in changes or data.get("old_entity_id"):
+            return True, True
+        return bool(changes & _ENTITY_INDEX_FIELDS), False
+    if event_type == "device_registry_updated":
+        if action in {"create", "remove"}:
+            return True, False
+        return bool(set(data.get("changes") or {}) & _DEVICE_INDEX_FIELDS), False
+    return True, False
+
+
+def registry_rediscovery_allowed(
+    last_run: datetime | None,
+    now: datetime,
+    *,
+    min_hours: float = REGISTRY_REDISCOVERY_MIN_HOURS,
+) -> bool:
+    """Rate-limit registry-triggered reviews to one per period."""
+    return last_run is None or now - last_run >= timedelta(hours=min_hours)
+
+
 _PERSONAL_DEVICE_KEYWORDS = {
     "android phone",
     "apple watch",

@@ -321,3 +321,32 @@ async def test_numeric_spike_survives_throttle_and_stay_expires(
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(hours=1, minutes=1))
     await hass.async_block_till_done()
     assert observer.stay_context == {}
+
+
+async def test_registry_churn_does_not_trigger_hourly_discovery(
+    hass: HomeAssistant, fake_ai: Any
+) -> None:
+    fake_ai.recommendations = ""
+    entry = await _setup(hass, {"observer_mode": "home", "auto_discovery": True})
+    observer = entry.runtime_data
+    await observer.discovery.async_discover(reason="manual")
+    calls = len(fake_ai.calls)
+
+    registry = er.async_get(hass)
+    for index in range(5):
+        registry.async_get_or_create(
+            "device_tracker", "unifi", f"client{index}", suggested_object_id=f"c{index}"
+        )
+    await hass.async_block_till_done()
+    assert not observer.discovery.state.get("registry_change_pending")
+
+    registry.async_get_or_create(
+        "sensor", "test", "new_meter", suggested_object_id="new_meter"
+    )
+    await hass.async_block_till_done()
+    assert observer.discovery.state["registry_change_pending"]
+
+    # The last review was moments ago, so the daily limit holds it back.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(hours=2))
+    await hass.async_block_till_done()
+    assert len(fake_ai.calls) == calls

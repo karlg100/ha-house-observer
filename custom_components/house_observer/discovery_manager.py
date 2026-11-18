@@ -35,6 +35,8 @@ from .discovery import (
     fallback_recommendations,
     next_discovery_due,
     parse_recommendations,
+    registry_change_effect,
+    registry_rediscovery_allowed,
     relevance_score,
 )
 from .prompts import DISCOVERY_STRUCTURE, build_discovery_prompt
@@ -257,14 +259,19 @@ class DiscoveryManager:
         self.observer.schedule_save()
 
     @callback
-    def _async_registry_changed(self, _event: Event) -> None:
-        """Apply label and registry changes quickly; rediscover later."""
-        if self._pending_index:
-            self._pending_index()
-        self._pending_index = async_call_later(
-            self.hass, INDEX_REFRESH_DELAY, self._async_reindex
-        )
-        if self._auto:
+    def _async_registry_changed(self, event: Event) -> None:
+        """Reindex for relevant metadata changes; rediscover only for new
+        or removed entities, and at most once a day."""
+        reindex, rediscover = registry_change_effect(event.event_type, dict(event.data))
+        if reindex:
+            if self._pending_index:
+                self._pending_index()
+            self._pending_index = async_call_later(
+                self.hass, INDEX_REFRESH_DELAY, self._async_reindex
+            )
+        if rediscover and self._auto:
+            self.state["registry_change_pending"] = True
+            self.observer.schedule_save()
             if self._pending_discovery:
                 self._pending_discovery()
             self._pending_discovery = async_call_later(
@@ -278,10 +285,17 @@ class DiscoveryManager:
         self._bind_candidate_listener()
         self.observer.async_selection_changed()
 
+    def _registry_review_due(self, now: datetime) -> bool:
+        if not self.state.get("registry_change_pending"):
+            return False
+        last_run = dt_util.parse_datetime(str(self.state.get("last_run", "")))
+        return registry_rediscovery_allowed(last_run, now)
+
     @callback
-    def _async_registry_discovery(self, _now: datetime) -> None:
+    def _async_registry_discovery(self, now: datetime) -> None:
         self._pending_discovery = None
-        if self._auto:
+        # When the daily limit blocks this, the hourly check runs it later.
+        if self._auto and not self._lock.locked() and self._registry_review_due(now):
             self._create_task("registry_change")
 
     # -------------------------------------------------------------- schedule
@@ -319,8 +333,12 @@ class DiscoveryManager:
 
     @callback
     def _async_discovery_check(self, now: datetime) -> None:
-        if self._auto and not self._lock.locked() and self.is_due(now):
+        if not self._auto or self._lock.locked():
+            return
+        if self.is_due(now):
             self._create_task("scheduled")
+        elif self._registry_review_due(now):
+            self._create_task("registry_change")
 
     @callback
     def _create_task(self, reason: str) -> None:
@@ -408,6 +426,7 @@ class DiscoveryManager:
             "last_error": error,
             "last_error_at": completed_at.isoformat() if error else None,
             "consecutive_failures": failures,
+            "registry_change_pending": False,
         }
         self.activity = dict.fromkeys(self.activity, 0)
 
@@ -461,5 +480,6 @@ class DiscoveryManager:
             "last_error": self.last_error,
             "last_error_at": self.state.get("last_error_at"),
             "consecutive_failures": self.failures,
+            "registry_review_pending": bool(self.state.get("registry_change_pending")),
             "recommendations": recommendations[:100],
         }
