@@ -1,0 +1,6 @@
+# Test dependencies. Conversation requirements are needed because House
+# Observer registers LLM tools and can run summaries through an agent.
+pytest-homeassistant-custom-component
+hassil
+home-assistant-intents
+ruff

@@ -47,6 +47,7 @@ from .const import (
     SERVICE_RECORD_NOTE,
     SERVICE_SET_STAY_CONTEXT,
 )
+from .llm_api import async_register as async_register_llm_api
 from .observer import HouseObserver
 from .repairs import async_clear_all
 
@@ -78,6 +79,7 @@ def _manager_for_call(hass: HomeAssistant, call: ServiceCall) -> HouseObserver:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up integration-level actions."""
+    async_register_llm_api(hass)
     domain_data = hass.data.setdefault(
         DOMAIN, {DATA_MANAGERS: {}, DATA_SERVICES_REGISTERED: False}
     )

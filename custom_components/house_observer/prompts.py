@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .const import CATEGORIES, MODE_RENTAL
@@ -87,9 +88,14 @@ _COMMON_RULES = (
     "current state includes for_minutes, how long it has held that state; use "
     "it to recognize things left open, unlocked, running, or offline. Do not "
     "flag recovered unavailable transitions when the entity is currently "
-    "available. Numeric events may include window_min, window_max, and "
-    "window_mean covering readings since the previous stored event; use them "
-    "to see short spikes. Safety automations remain authoritative; you are "
+    "available. The HOUSE LOG lists every change of every monitored entity in "
+    "the window: discrete states as intervals with durations, numeric sensors "
+    "as change-point segments (a new segment starts when the value leaves its "
+    "normal variation, so short spikes keep their own segment), thermostats as "
+    "mode/action/setpoint, computed overlaps of open doors with active heating "
+    "or cooling, and a timeline. Read it in full and report specific times and "
+    "durations from it. baseline_deviations lists numeric readings far from "
+    "the learned baseline. Safety automations remain authoritative; you are "
     "only providing analysis.\n"
     "Property knowledge contains owner notes and confirmed patterns; treat it "
     "as true context. Previous summaries give continuity: say when an earlier "
@@ -166,6 +172,18 @@ def focus_for(mode: str, occupancy: str) -> str:
     )
 
 
+_AGENT_RULES = (
+    "You may call the house_observer tools to read more detail, such as raw "
+    "readings for an entity and time range, when the house log is not "
+    "detailed enough to support a conclusion. Never control, change, or turn "
+    "on or off any device; this task is analysis only. Reply with only one "
+    "JSON object, with no other text, using exactly these keys: summary "
+    "(string), severity (normal, note, watch, or action), confidence (0 to "
+    "1), observations, anomalies, maintenance_notes, candidate_memories "
+    "(strings, one item per line), and notify_owner (boolean)."
+)
+
+
 def build_summary_prompt(
     *,
     mode: str,
@@ -173,6 +191,8 @@ def build_summary_prompt(
     guidance: str,
     reason: str,
     context: dict[str, Any],
+    house_log: str | None = None,
+    agent: bool = False,
 ) -> str:
     """Build the operational-analysis prompt."""
     role = (
@@ -184,16 +204,38 @@ def build_summary_prompt(
     if mode == MODE_RENTAL:
         parts.append(_RENTAL_RULES)
     parts.append(f"Current focus ({occupancy}): {focus_for(mode, occupancy)}")
+    if agent:
+        parts.append(_AGENT_RULES)
     parts.append(
         "BEGIN PERSISTENT OWNER GUIDANCE\n"
         f"{guidance or 'No persistent guidance configured.'}\n"
         "END PERSISTENT OWNER GUIDANCE"
     )
     parts.append(
-        f"Summary reason: {reason}\nTelemetry JSON:\n"
+        f"Summary reason: {reason}\nContext JSON:\n"
         f"{json.dumps(context, separators=(',', ':'), default=str)}"
     )
+    if house_log:
+        parts.append(house_log)
     return "\n\n".join(parts)
+
+
+_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+def parse_json_reply(text: str) -> dict[str, Any] | None:
+    """Extract the summary object from a conversational reply."""
+    candidates = [match.group(1) for match in _FENCE.finditer(text)]
+    if (first := text.find("{")) != -1 and (last := text.rfind("}")) > first:
+        candidates.append(text[first : last + 1])
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(value, dict) and "summary" in value:
+            return value
+    return None
 
 
 def build_discovery_prompt(

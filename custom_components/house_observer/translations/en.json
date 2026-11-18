@@ -47,13 +47,15 @@
           "ai_task_entity": "AI Task entity (optional)",
           "observer_guidance": "Persistent observer guidance (optional)",
           "summary_time": "Daily summary time",
-          "lookback_hours": "Daily summary lookback (hours)"
+          "lookback_hours": "Daily summary lookback (hours)",
+          "analysis_agent": "Analysis agent with House Observer tools (optional)"
         },
         "data_description": {
           "ai_task_entity": "Choose an AI Task provider, or leave blank to use Home Assistant's preferred one.",
           "observer_guidance": "Property-specific priorities included with every AI summary. Clear it to remove the guidance.",
           "summary_time": "Uses Home Assistant's configured time zone.",
-          "lookback_hours": "How much recent activity each scheduled summary reviews."
+          "lookback_hours": "How much recent activity each scheduled summary reviews.",
+          "analysis_agent": "A conversation agent that has House Observer selected under its Home Assistant LLM API setting. It can then read raw readings while writing summaries. If it fails, the AI Task entity is used instead. Use an agent without device-control access."
         }
       },
       "alerts": {
@@ -114,14 +116,16 @@
           "ai_task_entity": "AI Task entity (optional)",
           "observer_guidance": "Persistent observer guidance (optional)",
           "summary_time": "Daily summary time",
-          "lookback_hours": "Daily summary lookback (hours)"
+          "lookback_hours": "Daily summary lookback (hours)",
+          "analysis_agent": "Analysis agent with House Observer tools (optional)"
         },
         "data_description": {
           "observer_mode": "Home watches for overuse, high water use, and misbehaving equipment. Rental also watches for property misuse while guests stay and for problems to fix while it is empty.",
           "ai_task_entity": "Choose an AI Task provider, or leave blank to use Home Assistant's preferred one.",
           "observer_guidance": "Property-specific priorities included with every AI summary. Clear it to remove the guidance.",
           "summary_time": "Uses Home Assistant's configured time zone.",
-          "lookback_hours": "How much recent activity each scheduled summary reviews."
+          "lookback_hours": "How much recent activity each scheduled summary reviews.",
+          "analysis_agent": "A conversation agent that has House Observer selected under its Home Assistant LLM API setting. It can then read raw readings while writing summaries. If it fails, the AI Task entity is used instead. Use an agent without device-control access."
         }
       },
       "alerts": {

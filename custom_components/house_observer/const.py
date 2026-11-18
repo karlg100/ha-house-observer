@@ -30,6 +30,7 @@ CONF_RESERVATION_ENTITIES: Final = "reservation_entities"
 
 # Analysis
 CONF_AI_TASK_ENTITY: Final = "ai_task_entity"
+CONF_ANALYSIS_AGENT: Final = "analysis_agent"
 CONF_OBSERVER_GUIDANCE: Final = "observer_guidance"
 CONF_SUMMARY_TIME: Final = "summary_time"
 CONF_LOOKBACK_HOURS: Final = "lookback_hours"
@@ -131,3 +132,5 @@ OCCUPANCY_STATES: Final = ("occupied", "vacant", "unknown")
 
 EVENT_SUMMARY_GENERATED: Final = "house_observer_summary_generated"
 EVENT_DISCOVERY_COMPLETED: Final = "house_observer_discovery_completed"
+
+LLM_API_ID: Final = "house_observer"
